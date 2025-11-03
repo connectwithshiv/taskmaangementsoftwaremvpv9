@@ -66,7 +66,7 @@ export const UserDependencyService = {
    * Create a new user dependency chain
    * @param {Object} dependencyData - {
    *   workflowId, workflowName, name, description,
-   *   stageAssignments: [{ stageOrder, categoryId, categoryName, userId, userName, checkerId, checkerName }]
+   *   stageAssignments: [{ stageOrder, categoryId, categoryName, userId, userName, checkerId, checkerName, teamLeaderId, teamLeaderName }]
    * }
    */
   createUserDependency: (dependencyData) => {
@@ -120,7 +120,9 @@ export const UserDependencyService = {
           userId: stage.userId,
           userName: stage.userName,
           checkerId: stage.checkerId,
-          checkerName: stage.checkerName
+          checkerName: stage.checkerName,
+          teamLeaderId: stage.teamLeaderId || null,
+          teamLeaderName: stage.teamLeaderName || null
         })),
         createdAt: now,
         updatedAt: now,

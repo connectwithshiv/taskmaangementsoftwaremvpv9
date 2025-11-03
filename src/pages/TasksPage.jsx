@@ -254,7 +254,7 @@ const TaskPage = ({ isDarkMode, onToggleDarkMode }) => {
   const handleApproveTask = async (approvedChecklistItems, feedback) => {
     try {
       const adminId = localStorage.getItem('admin_id') || 'admin';
-      const result = TaskService.approveTask(taskForReview.id, adminId, feedback);
+      const result = TaskService.approveTask(taskForReview.id, adminId, feedback, null, approvedChecklistItems);
       
       if (result.success) {
         loadData();

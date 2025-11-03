@@ -350,8 +350,11 @@ import WorksheetPage from './pages/WorksheetPage';
 import GuidelinePage from './pages/GuidelinePage';
 import ChecklistPage from './pages/ChecklistPage';
 import WorkflowPage from './pages/WorkflowPage';
+import RateManagerPage from './pages/RateManagerPage';
+import EarningsStatementPage from './pages/EarningsStatementPage';
 import UserApp from './components/user/Userapp';
 import CheckerApp from './components/user/CheckerApp';
+import TeamLeaderApp from './components/user/TeamLeaderApp';
 import CategoryService from './services/categoryService';
 import TaskService from './services/taskService';
 import WorksheetService from './services/WorksheetService';
@@ -468,6 +471,20 @@ const App = () => {
   }
 
   // ==========================================
+  // TEAM LEADER INTERFACE (For role_id === 5)
+  // ==========================================
+  if (!isAdmin && userRole === 5) {
+    return (
+      <TeamLeaderApp 
+        currentUser={currentUser}
+        onLogout={handleLogout}
+        isDarkMode={isDarkMode}
+        setIsDarkMode={setIsDarkMode}
+      />
+    );
+  }
+
+  // ==========================================
   // DOER/USER INTERFACE (For role_id === 2 or other non-admin)
   // ==========================================
   if (!isAdmin) {
@@ -568,6 +585,16 @@ const App = () => {
     // Checklist Builder
     if (currentPage === 'checklists') {
       return <ChecklistPage isDarkMode={isDarkMode} />;
+    }
+
+    // Rate Manager
+    if (currentPage === 'rate-manager') {
+      return <RateManagerPage isDarkMode={isDarkMode} />;
+    }
+
+    // Earnings Statement
+    if (currentPage === 'earnings-statement') {
+      return <EarningsStatementPage isDarkMode={isDarkMode} />;
     }
 
     // User Dependency

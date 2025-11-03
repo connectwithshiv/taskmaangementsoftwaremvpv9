@@ -310,7 +310,9 @@ import {
   MdSettings,
   MdDocumentScanner,
   MdBook,
-  MdCheckBox
+  MdCheckBox,
+  MdAccountBalance,
+  MdAssessment
 } from 'react-icons/md';
 
 const AdminSidebar = ({ 
@@ -354,6 +356,20 @@ const AdminSidebar = ({
       id: 'guidelines', 
       label: 'Guidelines Builder', 
       icon: MdBook, 
+      submenu: [],
+      badge: 'NEW'
+    },
+    { 
+      id: 'rate-manager', 
+      label: 'Rate Manager', 
+      icon: MdAccountBalance, 
+      submenu: [],
+      badge: 'NEW'
+    },
+    { 
+      id: 'earnings-statement', 
+      label: 'Earnings Statement', 
+      icon: MdAssessment, 
       submenu: [],
       badge: 'NEW'
     },

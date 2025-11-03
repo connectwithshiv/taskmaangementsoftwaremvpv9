@@ -52,7 +52,9 @@ const UserDependencyBuilder = ({
           userId: '',
           userName: '',
           checkerId: '',
-          checkerName: ''
+          checkerName: '',
+          teamLeaderId: '',
+          teamLeaderName: ''
         }));
         setFormData({
           ...formData,
@@ -94,6 +96,10 @@ const UserDependencyBuilder = ({
       const checker = users.find(u => (u.id || u.user_id) === value);
       stage.checkerId = value;
       stage.checkerName = checker ? (checker.name || checker.username || '') : '';
+    } else if (field === 'teamLeaderId') {
+      const teamLeader = users.find(u => (u.id || u.user_id) === value);
+      stage.teamLeaderId = value;
+      stage.teamLeaderName = teamLeader ? (teamLeader.name || teamLeader.username || '') : '';
     }
     
     newAssignments[index] = stage;
@@ -375,6 +381,45 @@ const UserDependencyBuilder = ({
                           </p>
                         )}
                       </div>
+                    </div>
+
+                    {/* Team Leader Assignment */}
+                    <div>
+                      {(() => {
+                        const eligibleTeamLeaders = getEligibleUsers(stage.categoryId, 5); // Role 5 = Team Leader
+                        return (
+                          <>
+                            <label className={`block text-xs font-semibold mb-2 flex items-center gap-1 ${
+                              isDarkMode ? 'text-gray-400' : 'text-gray-600'
+                            }`}>
+                              <User size={14} />
+                              Team Leader (Optional)
+                            </label>
+                            <select
+                              value={stage.teamLeaderId || ''}
+                              onChange={(e) => handleStageAssignmentChange(index, 'teamLeaderId', e.target.value)}
+                              disabled={viewMode}
+                              className={`w-full px-3 py-2 rounded-lg border-2 text-sm ${
+                                isDarkMode
+                                  ? 'bg-slate-700 border-slate-600 text-white'
+                                  : 'bg-white border-gray-300 text-gray-900'
+                              } focus:outline-none focus:ring-2 focus:ring-blue-500 ${viewMode ? 'opacity-60 cursor-not-allowed' : ''}`}
+                            >
+                              <option value="">No team leader</option>
+                              {eligibleTeamLeaders.map(teamLeader => (
+                                <option key={teamLeader.id || teamLeader.user_id} value={teamLeader.id || teamLeader.user_id}>
+                                  {teamLeader.name || teamLeader.username || teamLeader.email}
+                                </option>
+                              ))}
+                            </select>
+                            {eligibleTeamLeaders.length === 0 && (
+                              <p className="text-xs text-amber-600 mt-1">
+                                No team leaders assigned to this category
+                              </p>
+                            )}
+                          </>
+                        );
+                      })()}
                     </div>
 
                     {stageError && (

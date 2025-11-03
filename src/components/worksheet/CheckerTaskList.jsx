@@ -140,7 +140,9 @@ const CheckerTaskList = ({
       const result = await TaskService.approveTask(
         taskForReview.id,
         currentChecker.id || currentChecker.user_id,
-        feedback
+        feedback,
+        null,
+        approvedChecklistItems
       );
       
       if (result.success) {

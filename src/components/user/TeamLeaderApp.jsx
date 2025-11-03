@@ -1,27 +1,27 @@
 import React, { useState, useEffect } from 'react';
 import UserSidebar from './Usersidebar';
 import UserHeader from './Userheader';
-import UserTaskList from './UserTaskList';
-import { UserTaskListWithWorksheet } from '../worksheet/UserTaskListWithWorksheet';
-import AuthService from '../../services/authService';
 import TaskService from '../../services/taskService';
-import WorksheetService from '../../services/WorksheetService';
 import WalletService from '../../services/walletService';
+import UserDependencyService from '../../services/userDependencyService';
 import { UserIdResolver } from './UserIdResolver';
+import TeamLeaderTaskList from '../worksheet/TeamLeaderTaskList';
 
 import { 
   MdTaskAlt, 
   MdCheckCircle,
   MdPending,
-  MdError,
   MdFolder,
-  MdAccountBalanceWallet,
-  MdTrendingUp,
   MdNotifications,
-  MdPerson
+  MdPerson,
+  MdAccountBalanceWallet,
+  MdPeople,
+  MdTrendingUp,
+  MdMessage,
+  MdFileUpload
 } from 'react-icons/md';
 
-const UserApp = ({ 
+const TeamLeaderApp = ({ 
   currentUser, 
   onLogout, 
   isDarkMode, 
@@ -29,17 +29,16 @@ const UserApp = ({
 }) => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [currentPage, setCurrentPage] = useState('dashboard');
-  const [selectedCategory, setSelectedCategory] = useState(null);
   const [categories, setCategories] = useState([]);
   const [assignedCategories, setAssignedCategories] = useState([]);
-  const [userStats, setUserStats] = useState({
+  const [teamLeaderStats, setTeamLeaderStats] = useState({
     totalTasks: 0,
-    completedTasks: 0,
-    pendingTasks: 0,
-    overdueTasks: 0,
+    pendingReview: 0,
+    reviewedTasks: 0,
+    totalTeamMembers: 0,
     walletBalance: 0,
     categoriesCount: 0,
-    notificationsCount: 5
+    notificationsCount: 0
   });
 
   // Load categories and calculate stats
@@ -47,10 +46,9 @@ const UserApp = ({
     loadData();
   }, [currentUser]);
 
-  // Ensure services are available globally for worksheet/task components
+  // Ensure services are available globally
   useEffect(() => {
     window.TaskService = TaskService;
-    window.WorksheetService = WorksheetService;
   }, []);
 
   // Listen for task updates
@@ -69,123 +67,79 @@ const UserApp = ({
     };
   }, [currentUser]);
 
-  // Key changes in loadData function to ensure ID consistency
-
-const loadData = () => {
-  if (!currentUser) {
-    console.log('No current user');
-    return;
-  }
-
-  try {
-    console.log('🔍 Loading data for user:', currentUser.username, 'ID:', currentUser.id);
-
-    // Load categories
-    const allCategories = JSON.parse(
-      localStorage.getItem('taskManagement_categories') || '[]'
-    );
-    setCategories(allCategories);
-
-    // Use currentUser.id directly (auth-format)
-    const userId = currentUser.id;
-    
-    if (!userId) {
-      console.error(' User has no ID!');
+  const loadData = () => {
+    if (!currentUser) {
+      console.log('No current user');
       return;
     }
-    
-    console.log('User ID:', userId, '(type:', typeof userId, ')');
-    
-    const userCategoryIds = currentUser.assigned_category_ids || [];
 
-    let userCategories = [];
-    if (userCategoryIds.includes('all')) {
-      userCategories = allCategories;
-    } else {
-      userCategories = allCategories.filter(cat => 
-        userCategoryIds.includes(cat.id)
+    try {
+      console.log('🔍 Loading data for team leader:', currentUser.username, 'ID:', currentUser.id);
+
+      // Load categories
+      const allCategories = JSON.parse(
+        localStorage.getItem('taskManagement_categories') || '[]'
       );
-    }
+      setCategories(allCategories);
 
-    // Load tasks
-    const tasksData = JSON.parse(
-      localStorage.getItem('taskManagement_tasks') || '{}'
-    );
-    
-    const allTasks = tasksData.tasks || [];
-    console.log('📋 All tasks loaded:', allTasks.length);
+      const userId = currentUser.id;
+      const userCategoryIds = currentUser.assigned_category_ids || [];
 
-    // Filter to user's tasks - check all possible ID formats
-    const userIds = [userId, currentUser.user_id].filter(Boolean);
-    const myTasks = allTasks.filter(task => {
-      const matches = userIds.includes(task.assignedTo);
-      if (matches) {
-        console.log('  ✅ Task matched:', task.title, 'assignedTo:', task.assignedTo);
+      // Filter categories assigned to this team leader
+      let userCategories = [];
+      if (userCategoryIds.includes('all')) {
+        userCategories = allCategories;
+      } else {
+        userCategories = allCategories.filter(cat => 
+          userCategoryIds.includes(cat.id)
+        );
       }
-      return matches;
-    });
-    
-    console.log('📊 My tasks found:', myTasks.length);
-    
-    if (myTasks.length === 0 && allTasks.length > 0) {
-      console.warn('⚠️ No tasks found for user IDs:', userIds);
-      console.warn('📋 Available tasks:', allTasks.slice(0, 5).map(t => ({ 
-        title: t.title, 
-        assignedTo: t.assignedTo,
-        assignedToName: t.assignedToName,
-        checkerId: t.checkerId,
-        checkerName: t.checkerName
-      })));
-    }
+      setAssignedCategories(userCategories);
 
-    // Add task counts to categories
-    const categoriesWithCounts = userCategories.map(cat => {
-      const categoryTasks = myTasks.filter(t => t.categoryId === cat.id);
-      return {
-        ...cat,
-        taskCount: categoryTasks.length
+      console.log(`Found ${userCategories.length} assigned categories`);
+
+      // Load tasks assigned to this team leader for review
+      const allTasks = TaskService.getAllTasks();
+      
+      // Filter tasks where this user is the team leader
+      // This requires checking the task's userDependencyId and stage assignments
+      const myTasks = allTasks.filter(task => {
+        if (!task.userDependencyId) return false;
+        
+        const dependency = UserDependencyService.getUserDependencyById(task.userDependencyId);
+        if (!dependency) return false;
+        
+        // Find the stage assignment for current stage
+        const stageAssignment = dependency.stageAssignments.find(
+          stage => stage.stageOrder === task.currentStage
+        );
+        
+        return stageAssignment && stageAssignment.teamLeaderId === userId;
+      });
+
+      // Calculate stats
+      const walletStats = WalletService.getUserStats(userId);
+      
+      const stats = {
+        totalTasks: myTasks.length,
+        reviewedTasks: myTasks.filter(t => t.status === 'finally-approved' || t.status === 'completed').length,
+        pendingReview: myTasks.filter(t => t.status === 'initially-approved' || t.status === 'team-leader-review').length,
+        totalTeamMembers: 0, // Will need to calculate from assigned dependencies
+        categoriesCount: userCategories.length,
+        notificationsCount: 0,
+        walletBalance: walletStats.balance || 0
       };
-    });
 
-    setAssignedCategories(categoriesWithCounts);
-
-    // Calculate statistics
-    const now = new Date();
-    const overdueCount = myTasks.filter(t => 
-      t.dueDate && 
-      new Date(t.dueDate) < now && 
-      t.status !== 'completed'
-    ).length;
-
-    // Get wallet balance
-    const walletStats = WalletService.getUserStats(userId);
-    
-    setUserStats({
-      totalTasks: myTasks.length,
-      completedTasks: myTasks.filter(t => t.status === 'completed').length,
-      pendingTasks: myTasks.filter(t => t.status === 'pending').length,
-      overdueTasks: overdueCount,
-      walletBalance: walletStats.balance || 0,
-      categoriesCount: categoriesWithCounts.length,
-      notificationsCount: 5
-    });
-
-    console.log('Stats updated:', {
-      total: myTasks.length,
-      completed: myTasks.filter(t => t.status === 'completed').length,
-      pending: myTasks.filter(t => t.status === 'pending').length
-    });
-  } catch (error) {
-    console.error(' Error loading data:', error);
-  }
-};
+      setTeamLeaderStats(stats);
+      console.log('✅ Team leader stats loaded:', stats);
+    } catch (error) {
+      console.error('Error loading data:', error);
+    }
+  };
 
   const handleNavigate = (pageId, data = null) => {
     console.log('Navigating to:', pageId);
     setCurrentPage(pageId);
-    if (pageId.startsWith('category-')) {
-      setSelectedCategory(data);
-    }
   };
 
   // Dashboard Page
@@ -194,101 +148,93 @@ const loadData = () => {
       {/* Welcome Section */}
       <div className={`mb-6 p-6 rounded-xl border-2 ${
         isDarkMode 
-          ? 'bg-gradient-to-r from-blue-900/40 to-indigo-900/40 border-blue-700' 
-          : 'bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-200'
+          ? 'bg-gradient-to-r from-indigo-900/40 to-purple-900/40 border-indigo-700' 
+          : 'bg-gradient-to-r from-indigo-50 to-purple-50 border-indigo-200'
       }`}>
         <div className="flex items-start gap-4">
           <div className={`w-16 h-16 rounded-full flex items-center justify-center ${
-            isDarkMode ? 'bg-blue-600' : 'bg-blue-500'
+            isDarkMode ? 'bg-indigo-600' : 'bg-indigo-500'
           } shadow-lg`}>
             <span className="text-white font-bold text-2xl">
-              {currentUser?.name?.charAt(0) || currentUser?.username?.charAt(0) || 'U'}
+              {currentUser?.name?.charAt(0) || currentUser?.username?.charAt(0) || 'TL'}
             </span>
           </div>
           <div className="flex-1">
             <h1 className={`text-3xl font-bold mb-2 ${
               isDarkMode ? 'text-white' : 'text-gray-900'
             }`}>
-              Welcome back, {currentUser?.name || currentUser?.username || 'User'}!
+              Welcome back, {currentUser?.name || currentUser?.username || 'Team Leader'}!
             </h1>
             <p className={`text-lg ${
-              isDarkMode ? 'text-blue-200' : 'text-blue-800'
+              isDarkMode ? 'text-indigo-200' : 'text-indigo-800'
             }`}>
-              {currentUser?.role_name || 'Employee'} • {currentUser?.position_name || 'Staff'}
+              {currentUser?.role_name || 'Team Leader'} • Team Management & Quality Control
             </p>
             <p className={`mt-2 text-sm ${
               isDarkMode ? 'text-gray-400' : 'text-gray-600'
             }`}>
-              You have {userStats.totalTasks} active tasks across {userStats.categoriesCount} categories
+              You have {teamLeaderStats.pendingReview} tasks awaiting your review across {teamLeaderStats.categoriesCount} categories
             </p>
           </div>
         </div>
       </div>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <div className={`p-6 rounded-xl shadow-lg border ${
-          isDarkMode 
-            ? 'bg-gradient-to-br from-blue-600 to-blue-700 border-blue-500' 
-            : 'bg-gradient-to-br from-blue-500 to-blue-600 border-blue-400'
-        }`}>
-          <div className="flex items-center justify-between mb-3">
-            <MdTaskAlt className="text-white" size={32} />
-            <span className="text-white/80 text-sm font-medium">Total</span>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
+        {[
+          { 
+            title: 'Total Tasks', 
+            value: teamLeaderStats.totalTasks, 
+            color: 'from-indigo-600 to-indigo-700',
+            icon: <MdTaskAlt size={32} />
+          },
+          { 
+            title: 'Pending Review', 
+            value: teamLeaderStats.pendingReview, 
+            color: 'from-orange-600 to-orange-700',
+            icon: <MdPending size={32} />
+          },
+          { 
+            title: 'Reviewed', 
+            value: teamLeaderStats.reviewedTasks, 
+            color: 'from-green-600 to-green-700',
+            icon: <MdCheckCircle size={32} />
+          },
+          { 
+            title: 'Team Members', 
+            value: teamLeaderStats.totalTeamMembers, 
+            color: 'from-blue-600 to-blue-700',
+            icon: <MdPeople size={32} />
+          },
+          { 
+            title: 'Wallet Balance', 
+            value: `₹${teamLeaderStats.walletBalance?.toFixed(2) || '0.00'}`, 
+            color: 'from-purple-600 to-purple-700',
+            icon: <MdAccountBalanceWallet size={32} />
+          }
+        ].map((card, idx) => (
+          <div
+            key={idx}
+            className={`bg-gradient-to-br ${card.color} p-6 rounded-xl shadow-lg text-white hover:shadow-xl transition-all transform hover:-translate-y-1`}
+          >
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-sm opacity-90">{card.title}</p>
+              {card.icon}
+            </div>
+            <p className="text-4xl font-bold mt-2">{card.value}</p>
           </div>
-          <p className="text-4xl font-bold text-white mb-1">{userStats.totalTasks}</p>
-          <p className="text-white/80 text-sm">Active Tasks</p>
-        </div>
-
-        <div className={`p-6 rounded-xl shadow-lg border ${
-          isDarkMode 
-            ? 'bg-gradient-to-br from-green-600 to-green-700 border-green-500' 
-            : 'bg-gradient-to-br from-green-500 to-green-600 border-green-400'
-        }`}>
-          <div className="flex items-center justify-between mb-3">
-            <MdCheckCircle className="text-white" size={32} />
-            <span className="text-white/80 text-sm font-medium">Done</span>
-          </div>
-          <p className="text-4xl font-bold text-white mb-1">{userStats.completedTasks}</p>
-          <p className="text-white/80 text-sm">Completed</p>
-        </div>
-
-        <div className={`p-6 rounded-xl shadow-lg border ${
-          isDarkMode 
-            ? 'bg-gradient-to-br from-yellow-600 to-orange-600 border-yellow-500' 
-            : 'bg-gradient-to-br from-yellow-500 to-orange-500 border-yellow-400'
-        }`}>
-          <div className="flex items-center justify-between mb-3">
-            <MdPending className="text-white" size={32} />
-            <span className="text-white/80 text-sm font-medium">Pending</span>
-          </div>
-          <p className="text-4xl font-bold text-white mb-1">{userStats.pendingTasks}</p>
-          <p className="text-white/80 text-sm">To Start</p>
-        </div>
-
-        <div className={`p-6 rounded-xl shadow-lg border ${
-          isDarkMode 
-            ? 'bg-gradient-to-br from-red-600 to-red-700 border-red-500' 
-            : 'bg-gradient-to-br from-red-500 to-red-600 border-red-400'
-        }`}>
-          <div className="flex items-center justify-between mb-3">
-            <MdError className="text-white" size={32} />
-            <span className="text-white/80 text-sm font-medium">Overdue</span>
-          </div>
-          <p className="text-4xl font-bold text-white mb-1">{userStats.overdueTasks}</p>
-          <p className="text-white/80 text-sm">Need Attention</p>
-        </div>
+        ))}
       </div>
 
-      {/* Quick Stats & Categories */}
+      {/* Recent Activity */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Categories */}
+        {/* My Categories */}
         <div className={`p-6 rounded-xl border shadow-lg ${
           isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-gray-200'
         }`}>
           <div className="flex items-center gap-3 mb-4">
             <div className={`p-2 rounded-lg ${
-              isDarkMode ? 'bg-purple-600' : 'bg-purple-500'
+              isDarkMode ? 'bg-indigo-600' : 'bg-indigo-500'
             }`}>
               <MdFolder className="text-white" size={24} />
             </div>
@@ -299,144 +245,191 @@ const loadData = () => {
             </h2>
           </div>
 
-          <div className="space-y-2">
-            {assignedCategories.length === 0 ? (
-              <p className={`text-center py-8 text-sm ${
-                isDarkMode ? 'text-gray-400' : 'text-gray-600'
-              }`}>
-                No categories assigned yet
-              </p>
-            ) : (
-              assignedCategories.slice(0, 5).map((category) => (
-                <div
-                  key={category.id}
-                  onClick={() => handleNavigate(`category-${category.id}`, category)}
-                  className={`p-3 rounded-lg border cursor-pointer ${
-                    isDarkMode 
-                      ? 'bg-slate-700 border-slate-600 hover:bg-slate-650' 
-                      : 'bg-gray-50 border-gray-200 hover:bg-gray-100'
-                  } transition-colors`}
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <MdFolder className={isDarkMode ? 'text-purple-400' : 'text-purple-600'} />
-                      <span className={`font-medium ${
-                        isDarkMode ? 'text-white' : 'text-gray-900'
-                      }`}>
-                        {category.name}
-                      </span>
-                    </div>
-                    <span className={`px-2 py-1 rounded text-xs font-medium ${
-                      isDarkMode ? 'bg-blue-900 text-blue-300' : 'bg-blue-100 text-blue-700'
-                    }`}>
-                      {category.taskCount} tasks
-                    </span>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-
-          {assignedCategories.length > 5 && (
-            <button 
-              onClick={() => handleNavigate('all-categories')}
-              className={`w-full mt-4 py-2 rounded-lg font-medium transition-colors ${
-                isDarkMode
-                  ? 'bg-slate-700 hover:bg-slate-650 text-white'
-                  : 'bg-gray-100 hover:bg-gray-200 text-gray-900'
-              }`}
-            >
-              View All Categories ({assignedCategories.length})
-            </button>
-          )}
-        </div>
-
-        {/* Recent Tasks Preview */}
-        <div className={`p-6 rounded-xl border shadow-lg ${
-          isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-gray-200'
-        }`}>
-          <div className="flex items-center gap-3 mb-4">
-            <div className={`p-2 rounded-lg ${
-              isDarkMode ? 'bg-blue-600' : 'bg-blue-500'
-            }`}>
-              <MdTaskAlt className="text-white" size={24} />
-            </div>
-            <h2 className={`text-xl font-bold ${
-              isDarkMode ? 'text-white' : 'text-gray-900'
-            }`}>
-              Recent Tasks
-            </h2>
-          </div>
-
           <div className="mb-4">
-            {userStats.totalTasks === 0 ? (
+            {assignedCategories.length === 0 ? (
               <p className={`text-center py-8 ${
                 isDarkMode ? 'text-gray-400' : 'text-gray-600'
               }`}>
-                No tasks assigned yet
+                No categories assigned
               </p>
             ) : (
               <div className="space-y-2">
-                <p className={`text-sm ${
-                  isDarkMode ? 'text-gray-400' : 'text-gray-600'
-                }`}>
-                  You have {userStats.pendingTasks} pending and {userStats.completedTasks} completed tasks
-                </p>
-                {userStats.overdueTasks > 0 && (
-                  <p className="text-sm text-red-500 font-medium">
-                     {userStats.overdueTasks} overdue task{userStats.overdueTasks > 1 ? 's' : ''} need attention!
+                {assignedCategories.slice(0, 5).map((cat, idx) => (
+                  <div
+                    key={idx}
+                    className={`flex items-center gap-3 p-3 rounded-lg ${
+                      isDarkMode ? 'bg-slate-700 hover:bg-slate-600' : 'bg-gray-50 hover:bg-gray-100'
+                    } transition-colors cursor-pointer`}
+                    onClick={() => handleNavigate(`category-${cat.id}`, cat)}
+                  >
+                    <div className={`w-2 h-2 rounded-full ${
+                      isDarkMode ? 'bg-indigo-400' : 'bg-indigo-500'
+                    }`}></div>
+                    <span className={`flex-1 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                      {cat.name}
+                    </span>
+                  </div>
+                ))}
+                {assignedCategories.length > 5 && (
+                  <p className={`text-center text-sm ${
+                    isDarkMode ? 'text-gray-400' : 'text-gray-600'
+                  }`}>
+                    +{assignedCategories.length - 5} more categories
                   </p>
                 )}
               </div>
             )}
           </div>
+        </div>
+
+        {/* Tasks Review Summary */}
+        <div className={`p-6 rounded-xl border shadow-lg ${
+          isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-gray-200'
+        }`}>
+          <div className="flex items-center gap-3 mb-4">
+            <div className={`p-2 rounded-lg ${
+              isDarkMode ? 'bg-green-600' : 'bg-green-500'
+            }`}>
+              <MdCheckCircle className="text-white" size={24} />
+            </div>
+            <h2 className={`text-xl font-bold ${
+              isDarkMode ? 'text-white' : 'text-gray-900'
+            }`}>
+              Review Summary
+            </h2>
+          </div>
+
+          <div className="space-y-4">
+            <div className={`p-4 rounded-lg ${isDarkMode ? 'bg-slate-700' : 'bg-orange-50'}`}>
+              <div className="flex items-center justify-between">
+                <span className={`font-semibold ${
+                  isDarkMode ? 'text-white' : 'text-orange-900'
+                }`}>
+                  Awaiting Your Review
+                </span>
+                <span className={`text-2xl font-bold ${
+                  isDarkMode ? 'text-orange-400' : 'text-orange-700'
+                }`}>
+                  {teamLeaderStats.pendingReview}
+                </span>
+              </div>
+              <p className={`text-sm mt-1 ${
+                isDarkMode ? 'text-gray-400' : 'text-orange-700'
+              }`}>
+                Tasks initially approved by checkers
+              </p>
+            </div>
+
+            <div className={`p-4 rounded-lg ${isDarkMode ? 'bg-slate-700' : 'bg-green-50'}`}>
+              <div className="flex items-center justify-between">
+                <span className={`font-semibold ${
+                  isDarkMode ? 'text-white' : 'text-green-900'
+                }`}>
+                  Final Approved
+                </span>
+                <span className={`text-2xl font-bold ${
+                  isDarkMode ? 'text-green-400' : 'text-green-700'
+                }`}>
+                  {teamLeaderStats.reviewedTasks}
+                </span>
+              </div>
+              <p className={`text-sm mt-1 ${
+                isDarkMode ? 'text-gray-400' : 'text-green-700'
+              }`}>
+                Successfully finalized
+              </p>
+            </div>
+          </div>
 
           <button 
             onClick={() => handleNavigate('tasks')}
-            className={`w-full py-2 rounded-lg font-medium transition-colors ${
+            className={`w-full mt-4 py-2 rounded-lg font-medium transition-colors ${
               isDarkMode
-                ? 'bg-blue-600 hover:bg-blue-700 text-white'
-                : 'bg-blue-500 hover:bg-blue-600 text-white'
+                ? 'bg-indigo-600 hover:bg-indigo-700 text-white'
+                : 'bg-indigo-500 hover:bg-indigo-600 text-white'
             }`}
           >
-            View All Tasks
+            Review Tasks
           </button>
         </div>
       </div>
     </div>
   );
 
-  // Tasks Page - WITH REAL COMPONENT
+  // Tasks Page
   const TasksPage = () => (
     <div className="p-6">
       <h2 className={`text-3xl font-bold mb-6 ${
         isDarkMode ? 'text-white' : 'text-gray-900'
       }`}>
-        My Tasks
+        Tasks for Review
       </h2>
-      <UserTaskListWithWorksheet
-        currentUser={currentUser}
+      <TeamLeaderTaskList
+        currentTeamLeader={currentUser}
         categories={categories}
         isDarkMode={isDarkMode}
-        selectedCategoryId={null}
       />
     </div>
   );
 
-  // Category Tasks Page
-  const CategoryTasksPage = () => (
+  // Profile Page
+  const ProfilePage = () => (
     <div className="p-6">
       <h2 className={`text-3xl font-bold mb-6 ${
         isDarkMode ? 'text-white' : 'text-gray-900'
       }`}>
-        {selectedCategory?.name || 'Category'} Tasks
+        Profile
       </h2>
-      <UserTaskListWithWorksheet
-        currentUser={currentUser}
-        categories={categories}
-        isDarkMode={isDarkMode}
-        selectedCategoryId={selectedCategory?.id}
-      />
+      <div className={`p-6 rounded-xl border ${
+        isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-gray-200'
+      }`}>
+        <div className="flex items-start gap-6">
+          <div className={`w-24 h-24 rounded-full flex items-center justify-center ${
+            isDarkMode ? 'bg-indigo-600' : 'bg-indigo-500'
+          }`}>
+            <span className="text-white font-bold text-3xl">
+              {currentUser?.name?.charAt(0) || currentUser?.username?.charAt(0) || 'TL'}
+            </span>
+          </div>
+          <div className="flex-1">
+            <h3 className={`text-2xl font-bold mb-2 ${
+              isDarkMode ? 'text-white' : 'text-gray-900'
+            }`}>
+              {currentUser?.name || currentUser?.username}
+            </h3>
+            <p className={`text-lg ${
+              isDarkMode ? 'text-gray-400' : 'text-gray-600'
+            }`}>
+              {currentUser?.role_name || 'Team Leader'}
+            </p>
+            <p className={`text-sm mt-2 ${
+              isDarkMode ? 'text-gray-400' : 'text-gray-600'
+            }`}>
+              {currentUser?.email || 'No email provided'}
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  // Notifications Page
+  const NotificationsPage = () => (
+    <div className="p-6">
+      <h2 className={`text-3xl font-bold mb-6 ${
+        isDarkMode ? 'text-white' : 'text-gray-900'
+      }`}>
+        Notifications
+      </h2>
+      <div className={`p-6 rounded-xl border ${
+        isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-gray-200'
+      }`}>
+        <p className={`text-center py-8 ${
+          isDarkMode ? 'text-gray-400' : 'text-gray-600'
+        }`}>
+          No new notifications
+        </p>
+      </div>
     </div>
   );
 
@@ -497,7 +490,7 @@ const loadData = () => {
       return (
         <div className="p-6">
           <div className="flex items-center justify-center h-64">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-4 border-blue-600"></div>
+            <div className="animate-spin rounded-full h-12 w-12 border-b-4 border-indigo-600"></div>
           </div>
         </div>
       );
@@ -616,7 +609,6 @@ const loadData = () => {
                 }`}
               >
                 <option value="all">All Sources</option>
-                <option value="task_completion">Task Completion</option>
                 <option value="mistake_found">Mistakes Found</option>
                 <option value="bonus">Bonus</option>
               </select>
@@ -647,11 +639,7 @@ const loadData = () => {
                           {getSourceLabel(earning.source)}
                         </h4>
                         <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                          earning.source === 'task_completion'
-                            ? isDarkMode
-                              ? 'bg-green-900/30 text-green-300'
-                              : 'bg-green-100 text-green-700'
-                            : earning.source === 'mistake_found'
+                          earning.source === 'mistake_found'
                             ? isDarkMode
                               ? 'bg-blue-900/30 text-blue-300'
                               : 'bg-blue-100 text-blue-700'
@@ -698,103 +686,6 @@ const loadData = () => {
     );
   };
 
-  // Notifications Page
-  const NotificationsPage = () => (
-    <div className="p-6">
-      <h2 className={`text-3xl font-bold mb-6 ${
-        isDarkMode ? 'text-white' : 'text-gray-900'
-      }`}>
-        Notifications
-      </h2>
-      <div className={`p-6 rounded-xl border ${
-        isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-gray-200'
-      }`}>
-        <p className={`text-center py-8 ${
-          isDarkMode ? 'text-gray-400' : 'text-gray-600'
-        }`}>
-          No new notifications
-        </p>
-      </div>
-    </div>
-  );
-
-  // Profile Page
-  const ProfilePage = () => (
-    <div className="p-6">
-      <h2 className={`text-3xl font-bold mb-6 ${
-        isDarkMode ? 'text-white' : 'text-gray-900'
-      }`}>
-        My Profile
-      </h2>
-      <div className={`p-6 rounded-xl border ${
-        isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-gray-200'
-      }`}>
-        <div className="space-y-4">
-          <div>
-            <label className={`block text-sm font-medium mb-1 ${
-              isDarkMode ? 'text-gray-400' : 'text-gray-600'
-            }`}>
-              Username
-            </label>
-            <p className={`text-lg ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-              {currentUser?.username}
-            </p>
-          </div>
-          <div>
-            <label className={`block text-sm font-medium mb-1 ${
-              isDarkMode ? 'text-gray-400' : 'text-gray-600'
-            }`}>
-              Email
-            </label>
-            <p className={`text-lg ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-              {currentUser?.email || 'Not provided'}
-            </p>
-          </div>
-          <div>
-            <label className={`block text-sm font-medium mb-1 ${
-              isDarkMode ? 'text-gray-400' : 'text-gray-600'
-            }`}>
-              Role
-            </label>
-            <p className={`text-lg ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
-              {currentUser?.role_name || 'User'}
-            </p>
-          </div>
-          <div>
-            <label className={`block text-sm font-medium mb-1 ${
-              isDarkMode ? 'text-gray-400' : 'text-gray-600'
-            }`}>
-              User ID
-            </label>
-            <p className={`text-sm font-mono ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
-              {currentUser?.id}
-            </p>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-
-  // Settings Page
-  const SettingsPage = () => (
-    <div className="p-6">
-      <h2 className={`text-3xl font-bold mb-6 ${
-        isDarkMode ? 'text-white' : 'text-gray-900'
-      }`}>
-        Settings
-      </h2>
-      <div className={`p-6 rounded-xl border ${
-        isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-gray-200'
-      }`}>
-        <p className={`text-center py-8 ${
-          isDarkMode ? 'text-gray-400' : 'text-gray-600'
-        }`}>
-          Settings page coming soon...
-        </p>
-      </div>
-    </div>
-  );
-
   // Render current page
   const renderPage = () => {
     switch (currentPage) {
@@ -804,16 +695,11 @@ const loadData = () => {
         return <TasksPage />;
       case 'wallet':
         return <WalletPage />;
-      case 'notifications':
-        return <NotificationsPage />;
       case 'profile':
         return <ProfilePage />;
-      case 'settings':
-        return <SettingsPage />;
+      case 'notifications':
+        return <NotificationsPage />;
       default:
-        if (currentPage.startsWith('category-')) {
-          return <CategoryTasksPage />;
-        }
         return <DashboardPage />;
     }
   };
@@ -847,4 +733,5 @@ const loadData = () => {
   );
 };
 
-export default UserApp;
+export default TeamLeaderApp;
+

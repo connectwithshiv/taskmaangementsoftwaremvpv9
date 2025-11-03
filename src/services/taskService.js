@@ -2,6 +2,9 @@ import { StorageService } from "./storageService";
 import { UserIdResolver } from "../components/user/UserIdResolver";
 import UserDependencyService from "./userDependencyService";
 import WorkflowService from "./workflowService";
+import RateManagerService from "./rateManagerService";
+import WalletService from "./walletService";
+import ChecklistService from "./ChecklistService";
 
 // Task statuses
 export const TASK_STATUS = {
@@ -12,7 +15,10 @@ export const TASK_STATUS = {
   SUBMITTED: 'submitted', // Submitted for review
   UNDER_REVIEW: 'under-review', // Admin is reviewing
   APPROVED: 'approved', // Admin approved
-  REVISION_REQUIRED: 'revision-required' // Admin requires corrections
+  REVISION_REQUIRED: 'revision-required', // Admin requires corrections
+  INITIALLY_APPROVED: 'initially-approved', // Checker approved, pending team leader review
+  TEAM_LEADER_REVIEW: 'team-leader-review', // Under team leader review
+  FINALLY_APPROVED: 'finally-approved' // Team leader approved
 };
 
 // Task priorities
@@ -133,6 +139,8 @@ const TaskService = {
           newTask.assignedToName = firstStage.userName;
           newTask.checkerId = firstStage.checkerId;
           newTask.checkerName = firstStage.checkerName;
+          newTask.teamLeaderId = firstStage.teamLeaderId || null;
+          newTask.teamLeaderName = firstStage.teamLeaderName || null;
           
           // Initialize stage history
           newTask.stageHistory = [];
@@ -143,6 +151,12 @@ const TaskService = {
           // Increment workflow usage
           WorkflowService.incrementTaskCount(newTask.workflowId);
         }
+      }
+      
+      // For non-workflow tasks, add team leader if assigned
+      if (!newTask.workflowId && taskData.teamLeaderId) {
+        newTask.teamLeaderId = taskData.teamLeaderId;
+        newTask.teamLeaderName = taskData.teamLeaderName || null;
       }
       
       tasks.push(newTask);
@@ -757,7 +771,7 @@ const TaskService = {
    * Admin reviews and approves task
    * Handles workflow handoff if task is part of a workflow
    */
-  approveTask: (taskId, adminId, adminFeedback = null, outputData = null) => {
+  approveTask: (taskId, adminId, adminFeedback = null, outputData = null, approvedChecklistItems = []) => {
     try {
       const taskIndex = tasks.findIndex(t => t.id === taskId);
       
@@ -803,18 +817,23 @@ const TaskService = {
         );
         
         if (isLastStage) {
+          // Check if there's a team leader for this stage
+          const hasTeamLeader = currentStageAssignment && currentStageAssignment.teamLeaderId;
+          
           // Mark workflow as complete
           tasks[taskIndex] = {
             ...task,
-            status: TASK_STATUS.COMPLETED,
+            status: hasTeamLeader ? TASK_STATUS.INITIALLY_APPROVED : TASK_STATUS.COMPLETED,
             updatedAt: now,
             updatedBy: adminId,
             approvedBy: adminId,
             approvedAt: now,
-            completedDate: now,
-            isWorkflowComplete: true,
+            completedDate: hasTeamLeader ? null : now,
+            isWorkflowComplete: !hasTeamLeader,
             currentStage: task.currentStage,
             stageHistory: updatedStageHistory,
+            teamLeaderId: hasTeamLeader ? currentStageAssignment.teamLeaderId : task.teamLeaderId,
+            teamLeaderName: hasTeamLeader ? currentStageAssignment.teamLeaderName : task.teamLeaderName,
             review: {
               ...task.review,
               reviewedAt: now,
@@ -825,21 +844,82 @@ const TaskService = {
             logs: [
               ...(task.logs || []),
               {
-                action: 'workflow_completed',
+                action: hasTeamLeader ? 'initially_approved' : 'workflow_completed',
                 timestamp: now,
                 performedBy: adminId,
-                details: `Workflow completed at stage ${task.currentStage}`
+                details: hasTeamLeader 
+                  ? `Workflow initially approved at stage ${task.currentStage}, pending team leader review`
+                  : `Workflow completed at stage ${task.currentStage}`
               }
             ]
           };
           
           saveTasks();
           
+          // Calculate payouts for workflow completion ONLY if no team leader is involved
+          if (!hasTeamLeader) {
+            try {
+              console.log('💰 Starting payout calculation for workflow completion');
+              
+              // Calculate doer earnings for final stage
+              const doerEarnings = RateManagerService.calculateDoerEarnings(task.categoryId);
+              console.log('📊 Doer earnings calculated:', doerEarnings, 'for category:', task.categoryId);
+              
+              if (doerEarnings > 0 && task.assignedTo) {
+                const result = WalletService.addEarnings({
+                  userId: task.assignedTo,
+                  amount: doerEarnings,
+                  source: 'task_completion',
+                  taskId: task.id,
+                  categoryId: task.categoryId,
+                  description: `Workflow completed: ${task.title}`,
+                  metadata: { approvedAt: now, approvedBy: adminId, workflowComplete: true }
+                });
+                console.log('✅ Doer payout result:', result);
+              }
+
+              // Calculate checker earnings
+              const checklist = ChecklistService.getChecklistByCategory(task.categoryId);
+              console.log('📋 Checklist found:', checklist ? 'Yes' : 'No');
+              
+              if (checklist && checklist.items && checklist.items.length > 0) {
+                const totalItems = checklist.items.length;
+                const approvedCount = approvedChecklistItems.length;
+                const mistakesCount = totalItems - approvedCount;
+                
+                console.log('🔍 Workflow checklist analysis:', { totalItems, approvedCount, mistakesCount });
+                
+                if (mistakesCount > 0 && adminId) {
+                  const checkerEarnings = RateManagerService.calculateCheckerEarnings(task.categoryId, mistakesCount);
+                  console.log('📊 Checker earnings calculated:', checkerEarnings, 'for', mistakesCount, 'mistakes');
+                  
+                  if (checkerEarnings > 0) {
+                    const result = WalletService.addEarnings({
+                      userId: adminId,
+                      amount: checkerEarnings,
+                      source: 'mistake_found',
+                      taskId: task.id,
+                      categoryId: task.categoryId,
+                      description: `Found ${mistakesCount} mistake(s) in workflow: ${task.title}`,
+                      metadata: { mistakesCount, approvedCount, totalItems, workflowComplete: true }
+                    });
+                    console.log('✅ Checker payout result:', result);
+                  }
+                }
+              }
+            } catch (payoutError) {
+              console.error('❌ Error calculating payouts for workflow:', payoutError);
+              console.error('Stack trace:', payoutError.stack);
+            }
+          } else {
+            console.log('⏸️ Payouts deferred - awaiting team leader review');
+          }
+          
           return { 
             success: true, 
             task: tasks[taskIndex],
-            message: 'Workflow completed successfully',
-            isWorkflowComplete: true
+            message: hasTeamLeader ? 'Task initially approved, awaiting team leader review' : 'Workflow completed successfully',
+            isWorkflowComplete: !hasTeamLeader
           };
         } else {
           // Move to next stage
@@ -854,6 +934,9 @@ const TaskService = {
               message: 'Next stage assignment not found' 
             };
           }
+          
+          // Check if current stage has team leader
+          const currentStageHasTeamLeader = currentStageAssignment && currentStageAssignment.teamLeaderId;
           
           // Update task for next stage
           tasks[taskIndex] = {
@@ -871,6 +954,8 @@ const TaskService = {
             stageHistory: updatedStageHistory,
             review: null, // Reset review for next stage
             revisedCount: 0, // Reset revision count for new stage
+            teamLeaderId: nextStage.teamLeaderId || task.teamLeaderId,
+            teamLeaderName: nextStage.teamLeaderName || task.teamLeaderName,
             logs: [
               ...(task.logs || []),
               {
@@ -883,6 +968,65 @@ const TaskService = {
           };
           
           saveTasks();
+          
+          // Calculate payouts for intermediate stage completion ONLY if no team leader
+          if (!currentStageHasTeamLeader) {
+            try {
+              console.log('💰 Starting payout calculation for intermediate stage');
+              
+              // Calculate doer earnings for this stage
+              const doerEarnings = RateManagerService.calculateDoerEarnings(task.categoryId);
+              console.log('📊 Doer earnings calculated:', doerEarnings);
+              
+              if (doerEarnings > 0 && task.assignedTo) {
+                const result = WalletService.addEarnings({
+                  userId: task.assignedTo,
+                  amount: doerEarnings,
+                  source: 'task_completion',
+                  taskId: task.id,
+                  categoryId: task.categoryId,
+                  description: `Stage ${task.currentStage} completed: ${task.title}`,
+                  metadata: { approvedAt: now, approvedBy: adminId, stage: task.currentStage }
+                });
+                console.log('✅ Doer payout result:', result);
+              }
+
+              // Calculate checker earnings
+              const checklist = ChecklistService.getChecklistByCategory(task.categoryId);
+              console.log('📋 Checklist found:', checklist ? 'Yes' : 'No');
+              
+              if (checklist && checklist.items && checklist.items.length > 0) {
+                const totalItems = checklist.items.length;
+                const approvedCount = approvedChecklistItems.length;
+                const mistakesCount = totalItems - approvedCount;
+                
+                console.log('🔍 Intermediate stage checklist analysis:', { totalItems, approvedCount, mistakesCount });
+                
+                if (mistakesCount > 0 && adminId) {
+                  const checkerEarnings = RateManagerService.calculateCheckerEarnings(task.categoryId, mistakesCount);
+                  console.log('📊 Checker earnings calculated:', checkerEarnings);
+                  
+                  if (checkerEarnings > 0) {
+                    const result = WalletService.addEarnings({
+                      userId: adminId,
+                      amount: checkerEarnings,
+                      source: 'mistake_found',
+                      taskId: task.id,
+                      categoryId: task.categoryId,
+                      description: `Found ${mistakesCount} mistake(s) in stage ${task.currentStage}: ${task.title}`,
+                      metadata: { mistakesCount, approvedCount, totalItems, stage: task.currentStage }
+                    });
+                    console.log('✅ Checker payout result:', result);
+                  }
+                }
+              }
+            } catch (payoutError) {
+              console.error('❌ Error calculating payouts for intermediate stage:', payoutError);
+              console.error('Stack trace:', payoutError.stack);
+            }
+          } else {
+            console.log('⏸️ Payouts deferred for intermediate stage - awaiting team leader review');
+          }
           
           // Dispatch event for notifications
           if (typeof window !== 'undefined') {
@@ -932,6 +1076,67 @@ const TaskService = {
         };
 
         saveTasks();
+        
+        // Calculate and add payouts for normal approval
+        try {
+          console.log('💰 Starting payout calculation for task:', task.id);
+          
+          // Calculate doer earnings (full amount when task approved)
+          const doerEarnings = RateManagerService.calculateDoerEarnings(task.categoryId);
+          console.log('📊 Doer earnings calculated:', doerEarnings, 'for category:', task.categoryId);
+          
+          if (doerEarnings > 0 && task.assignedTo) {
+            const result = WalletService.addEarnings({
+              userId: task.assignedTo,
+              amount: doerEarnings,
+              source: 'task_completion',
+              taskId: task.id,
+              categoryId: task.categoryId,
+              description: `Task approved: ${task.title}`,
+              metadata: { approvedAt: now, approvedBy: adminId }
+            });
+            console.log('✅ Doer payout result:', result);
+          }
+
+          // Calculate checker earnings (per mistake found)
+          const checklist = ChecklistService.getChecklistByCategory(task.categoryId);
+          console.log('📋 Checklist found:', checklist ? 'Yes' : 'No', 'for category:', task.categoryId);
+          
+          if (checklist && checklist.items && checklist.items.length > 0) {
+            const totalItems = checklist.items.length;
+            const approvedCount = approvedChecklistItems.length;
+            const mistakesCount = totalItems - approvedCount;
+            
+            console.log('🔍 Checklist analysis:', {
+              totalItems,
+              approvedCount,
+              mistakesCount,
+              approvedChecklistItems
+            });
+            
+            if (mistakesCount > 0 && adminId) {
+              const checkerEarnings = RateManagerService.calculateCheckerEarnings(task.categoryId, mistakesCount);
+              console.log('📊 Checker earnings calculated:', checkerEarnings, 'for', mistakesCount, 'mistakes');
+              
+              if (checkerEarnings > 0) {
+                const result = WalletService.addEarnings({
+                  userId: adminId,
+                  amount: checkerEarnings,
+                  source: 'mistake_found',
+                  taskId: task.id,
+                  categoryId: task.categoryId,
+                  description: `Found ${mistakesCount} mistake(s) in: ${task.title}`,
+                  metadata: { mistakesCount, approvedCount, totalItems }
+                });
+                console.log('✅ Checker payout result:', result);
+              }
+            }
+          }
+        } catch (payoutError) {
+          console.error('❌ Error calculating payouts:', payoutError);
+          console.error('Stack trace:', payoutError.stack);
+          // Don't fail the approval if payout calculation fails
+        }
         
         return { 
           success: true, 
@@ -991,6 +1196,43 @@ const TaskService = {
 
       saveTasks();
       
+      // Calculate checker earnings for mistakes found during revision
+      try {
+        console.log('💰 Starting checker payout calculation for revision');
+        const checklist = ChecklistService.getChecklistByCategory(task.categoryId);
+        console.log('📋 Checklist found:', checklist ? 'Yes' : 'No');
+        
+        if (checklist && checklist.items && checklist.items.length > 0) {
+          const totalItems = checklist.items.length;
+          const approvedCount = approvedChecklistItems.length;
+          const mistakesCount = totalItems - approvedCount;
+          
+          console.log('🔍 Revision analysis:', { totalItems, approvedCount, mistakesCount });
+          
+          if (mistakesCount > 0 && adminId) {
+            const checkerEarnings = RateManagerService.calculateCheckerEarnings(task.categoryId, mistakesCount);
+            console.log('📊 Checker earnings calculated:', checkerEarnings);
+            
+            if (checkerEarnings > 0) {
+              const result = WalletService.addEarnings({
+                userId: adminId,
+                amount: checkerEarnings,
+                source: 'mistake_found',
+                taskId: task.id,
+                categoryId: task.categoryId,
+                description: `Found ${mistakesCount} mistake(s) requiring revision: ${task.title}`,
+                metadata: { mistakesCount, approvedCount, totalItems, revision: true }
+              });
+              console.log('✅ Checker payout result:', result);
+            }
+          }
+        }
+      } catch (payoutError) {
+        console.error('❌ Error calculating payouts:', payoutError);
+        console.error('Stack trace:', payoutError.stack);
+        // Don't fail the revision request if payout calculation fails
+      }
+      
       return { 
         success: true, 
         task: tasks[taskIndex],
@@ -1013,6 +1255,179 @@ const TaskService = {
       t.assignedTo === userId && 
       t.status === TASK_STATUS.REVISION_REQUIRED
     );
+  },
+
+  /**
+   * Team Leader approves initially approved task
+   */
+  teamLeaderApprove: (taskId, teamLeaderId, adminFeedback = null) => {
+    try {
+      const taskIndex = tasks.findIndex(t => t.id === taskId);
+      
+      if (taskIndex === -1) {
+        return { success: false, message: 'Task not found' };
+      }
+
+      const now = new Date().toISOString();
+      const task = tasks[taskIndex];
+      
+      // Verify this task is awaiting team leader review
+      if (task.status !== TASK_STATUS.INITIALLY_APPROVED && task.status !== TASK_STATUS.TEAM_LEADER_REVIEW) {
+        return { 
+          success: false, 
+          message: 'Task is not in a state that requires team leader approval' 
+        };
+      }
+      
+      // Verify this user is the assigned team leader
+      if (task.teamLeaderId && String(task.teamLeaderId) !== String(teamLeaderId)) {
+        return { 
+          success: false, 
+          message: 'Only the assigned team leader can approve this task' 
+        };
+      }
+
+      // Mark task as finally approved
+      tasks[taskIndex] = {
+        ...task,
+        status: TASK_STATUS.FINALLY_APPROVED,
+        updatedAt: now,
+        updatedBy: teamLeaderId,
+        approvedBy: teamLeaderId,
+        approvedAt: now,
+        completedDate: now,
+        isWorkflowComplete: true,
+        review: {
+          ...task.review,
+          teamLeaderReviewedAt: now,
+          teamLeaderReviewedBy: teamLeaderId,
+          teamLeaderFeedback: adminFeedback,
+          finallyApproved: true
+        },
+        logs: [
+          ...(task.logs || []),
+          {
+            action: 'finally_approved',
+            timestamp: now,
+            performedBy: teamLeaderId,
+            details: 'Task finally approved by team leader'
+          }
+        ]
+      };
+
+      saveTasks();
+      
+      // Calculate and add payouts for final approval
+      try {
+        console.log('💰 Starting payout calculation for team leader approval');
+        
+        // Calculate doer earnings (full amount when finally approved)
+        const doerEarnings = RateManagerService.calculateDoerEarnings(task.categoryId);
+        console.log('📊 Doer earnings calculated:', doerEarnings);
+        
+        if (doerEarnings > 0 && task.assignedTo) {
+          const result = WalletService.addEarnings({
+            userId: task.assignedTo,
+            amount: doerEarnings,
+            source: 'task_completion',
+            taskId: task.id,
+            categoryId: task.categoryId,
+            description: `Task finally approved by team leader: ${task.title}`,
+            metadata: { approvedAt: now, approvedBy: teamLeaderId, finalApproval: true }
+          });
+          console.log('✅ Doer payout result:', result);
+        }
+
+        // Note: Checker earnings already processed at initial approval stage
+      } catch (payoutError) {
+        console.error('❌ Error calculating payouts:', payoutError);
+        console.error('Stack trace:', payoutError.stack);
+      }
+      
+      return { 
+        success: true, 
+        task: tasks[taskIndex],
+        message: 'Task finally approved successfully'
+      };
+    } catch (error) {
+      console.error('Error in team leader approval:', error);
+      return { 
+        success: false, 
+        message: error.message 
+      };
+    }
+  },
+
+  /**
+   * Team Leader requires corrections
+   */
+  teamLeaderRequireCorrection: (taskId, teamLeaderId, feedback, corrections = {}) => {
+    try {
+      const taskIndex = tasks.findIndex(t => t.id === taskId);
+      
+      if (taskIndex === -1) {
+        return { success: false, message: 'Task not found' };
+      }
+
+      const now = new Date().toISOString();
+      const task = tasks[taskIndex];
+      
+      // Verify this task is awaiting team leader review
+      if (task.status !== TASK_STATUS.INITIALLY_APPROVED && task.status !== TASK_STATUS.TEAM_LEADER_REVIEW) {
+        return { 
+          success: false, 
+          message: 'Task is not in a state that requires team leader review' 
+        };
+      }
+      
+      // Verify this user is the assigned team leader
+      if (task.teamLeaderId && String(task.teamLeaderId) !== String(teamLeaderId)) {
+        return { 
+          success: false, 
+          message: 'Only the assigned team leader can require corrections' 
+        };
+      }
+
+      // Mark task as requiring correction
+      tasks[taskIndex] = {
+        ...task,
+        status: TASK_STATUS.REVISION_REQUIRED,
+        updatedAt: now,
+        updatedBy: teamLeaderId,
+        review: {
+          ...task.review,
+          teamLeaderFeedback: feedback,
+          teamLeaderCorrections: corrections,
+          teamLeaderReviewedAt: now,
+          teamLeaderReviewedBy: teamLeaderId,
+          requiresCorrection: true
+        },
+        logs: [
+          ...(task.logs || []),
+          {
+            action: 'team_leader_correction',
+            timestamp: now,
+            performedBy: teamLeaderId,
+            details: 'Team leader requested corrections',
+            feedback: feedback
+          }
+        ]
+      };
+
+      saveTasks();
+      
+      return { 
+        success: true, 
+        task: tasks[taskIndex],
+        message: 'Corrections requested successfully'
+      };
+    } catch (error) {
+      console.error('Error requesting corrections:', error);
+      return { 
+        success: false, 
+        message: error.message 
+      };
+    }
   }
 };
 

@@ -3,6 +3,8 @@ import UserSidebar from './Usersidebar';
 import UserHeader from './Userheader';
 import CheckerTaskList from '../worksheet/CheckerTaskList';
 import TaskService from '../../services/taskService';
+import WalletService from '../../services/walletService';
+import { UserIdResolver } from './UserIdResolver';
 
 import { 
   MdTaskAlt, 
@@ -10,7 +12,8 @@ import {
   MdPending,
   MdFolder,
   MdNotifications,
-  MdPerson
+  MdPerson,
+  MdAccountBalanceWallet
 } from 'react-icons/md';
 
 const CheckerApp = ({ 
@@ -96,13 +99,16 @@ const CheckerApp = ({
       );
 
       // Calculate stats
+      const walletStats = WalletService.getUserStats(userId);
+      
       const stats = {
         totalTasks: myTasks.length,
         reviewedTasks: myTasks.filter(t => t.status === 'approved').length,
         pendingReview: myTasks.filter(t => t.status === 'submitted' || t.status === 'under-review').length,
         revisionRequests: myTasks.filter(t => t.status === 'revision-required').length,
         categoriesCount: userCategories.length,
-        notificationsCount: 0
+        notificationsCount: 0,
+        walletBalance: walletStats.balance || 0
       };
 
       setCheckerStats(stats);
@@ -155,7 +161,7 @@ const CheckerApp = ({
       </div>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
         {[
           { 
             title: 'Total Tasks', 
@@ -180,6 +186,12 @@ const CheckerApp = ({
             value: checkerStats.revisionRequests, 
             color: 'from-red-600 to-red-700',
             icon: <MdPending size={32} />
+          },
+          { 
+            title: 'Wallet Balance', 
+            value: `₹${checkerStats.walletBalance?.toFixed(2) || '0.00'}`, 
+            color: 'from-purple-600 to-purple-700',
+            icon: <MdAccountBalanceWallet size={32} />
           }
         ].map((card, idx) => (
           <div
@@ -402,6 +414,259 @@ const CheckerApp = ({
     </div>
   );
 
+  // Wallet Page
+  const WalletPage = () => {
+    const [wallet, setWallet] = useState(null);
+    const [earnings, setEarnings] = useState([]);
+    const [stats, setStats] = useState(null);
+    const [filter, setFilter] = useState('all');
+    const [loading, setLoading] = useState(true);
+
+    const loadWallet = () => {
+      setLoading(true);
+      try {
+        const userId = UserIdResolver.getUserId(currentUser);
+        const wallet = WalletService.getOrCreateWallet(userId);
+        const earningsHistory = WalletService.getEarningsHistory(userId);
+        const userStats = WalletService.getUserStats(userId);
+        
+        setWallet(wallet);
+        setEarnings(earningsHistory);
+        setStats(userStats);
+      } catch (error) {
+        console.error('Error loading wallet:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    useEffect(() => {
+      loadWallet();
+      
+      const handleUpdate = () => {
+        loadWallet();
+      };
+      
+      window.addEventListener('walletsUpdated', handleUpdate);
+      return () => {
+        window.removeEventListener('walletsUpdated', handleUpdate);
+      };
+    }, [currentUser]);
+
+    const getSourceLabel = (source) => {
+      const labels = {
+        'task_completion': 'Task Approved',
+        'mistake_found': 'Mistakes Found',
+        'bonus': 'Bonus',
+        'adjustment': 'Adjustment'
+      };
+      return labels[source] || source;
+    };
+
+    const filteredEarnings = filter === 'all' 
+      ? earnings 
+      : earnings.filter(e => e.source === filter);
+
+    if (loading) {
+      return (
+        <div className="p-6">
+          <div className="flex items-center justify-center h-64">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-4 border-blue-600"></div>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="p-6">
+        <h2 className={`text-3xl font-bold mb-6 ${
+          isDarkMode ? 'text-white' : 'text-gray-900'
+        }`}>
+          My Wallet
+        </h2>
+        
+        {/* Balance Card */}
+        <div className={`mb-6 p-8 rounded-xl border-2 ${
+          isDarkMode 
+            ? 'bg-gradient-to-r from-purple-900/40 to-pink-900/40 border-purple-700' 
+            : 'bg-gradient-to-r from-purple-50 to-pink-50 border-purple-200'
+        }`}>
+          <div className="flex items-center justify-between">
+            <div>
+              <p className={`text-sm mb-2 ${
+                isDarkMode ? 'text-purple-200' : 'text-purple-800'
+              }`}>
+                Available Balance
+              </p>
+              <h3 className={`text-5xl font-bold ${
+                isDarkMode ? 'text-white' : 'text-gray-900'
+              }`}>
+                ₹{stats?.balance?.toFixed(2) || '0.00'}
+              </h3>
+              <p className={`text-sm mt-2 ${
+                isDarkMode ? 'text-gray-400' : 'text-gray-600'
+              }`}>
+                Last updated: {wallet?.updatedAt ? new Date(wallet.updatedAt).toLocaleDateString() : 'Today'}
+              </p>
+            </div>
+            <MdAccountBalanceWallet className={`${
+              isDarkMode ? 'text-purple-400' : 'text-purple-600'
+            }`} size={80} />
+          </div>
+        </div>
+
+        {/* Stats Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+          <div className={`p-6 rounded-xl border-2 ${
+            isDarkMode 
+              ? 'bg-green-900/20 border-green-700' 
+              : 'bg-green-50 border-green-200'
+          }`}>
+            <p className={`text-sm mb-1 ${
+              isDarkMode ? 'text-green-300' : 'text-green-700'
+            }`}>
+              Total Earned
+            </p>
+            <h4 className={`text-3xl font-bold ${
+              isDarkMode ? 'text-white' : 'text-gray-900'
+            }`}>
+              ₹{stats?.totalEarned?.toFixed(2) || '0.00'}
+            </h4>
+          </div>
+          <div className={`p-6 rounded-xl border-2 ${
+            isDarkMode 
+              ? 'bg-blue-900/20 border-blue-700' 
+              : 'bg-blue-50 border-blue-200'
+          }`}>
+            <p className={`text-sm mb-1 ${
+              isDarkMode ? 'text-blue-300' : 'text-blue-700'
+            }`}>
+              Total Transactions
+            </p>
+            <h4 className={`text-3xl font-bold ${
+              isDarkMode ? 'text-white' : 'text-gray-900'
+            }`}>
+              {stats?.earningsCount || 0}
+            </h4>
+          </div>
+          <div className={`p-6 rounded-xl border-2 ${
+            isDarkMode 
+              ? 'bg-orange-900/20 border-orange-700' 
+              : 'bg-orange-50 border-orange-200'
+          }`}>
+            <p className={`text-sm mb-1 ${
+              isDarkMode ? 'text-orange-300' : 'text-orange-700'
+            }`}>
+              Withdrawn
+            </p>
+            <h4 className={`text-3xl font-bold ${
+              isDarkMode ? 'text-white' : 'text-gray-900'
+            }`}>
+              ₹{stats?.totalWithdrawn?.toFixed(2) || '0.00'}
+            </h4>
+          </div>
+        </div>
+
+        {/* Earnings History */}
+        <div className={`rounded-xl border-2 ${
+          isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-gray-200'
+        }`}>
+          <div className={`px-6 py-4 border-b ${
+            isDarkMode ? 'border-slate-700' : 'border-gray-200'
+          }`}>
+            <div className="flex items-center justify-between">
+              <h3 className={`text-xl font-bold ${
+                isDarkMode ? 'text-white' : 'text-gray-900'
+              }`}>
+                Earnings History
+              </h3>
+              <select
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+                className={`px-4 py-2 rounded-lg border text-sm ${
+                  isDarkMode
+                    ? 'bg-slate-700 border-slate-600 text-white'
+                    : 'bg-white border-gray-300 text-gray-900'
+                }`}
+              >
+                <option value="all">All Sources</option>
+                <option value="mistake_found">Mistakes Found</option>
+                <option value="bonus">Bonus</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="divide-y divide-gray-200 dark:divide-slate-700">
+            {filteredEarnings.length === 0 ? (
+              <div className="p-8 text-center">
+                <MdAccountBalanceWallet className="mx-auto text-gray-400 mb-4" size={48} />
+                <p className={`text-sm ${
+                  isDarkMode ? 'text-gray-400' : 'text-gray-600'
+                }`}>
+                  No earnings history yet
+                </p>
+              </div>
+            ) : (
+              filteredEarnings.map((earning) => (
+                <div key={earning.id} className={`p-4 hover:bg-opacity-80 transition-colors ${
+                  isDarkMode ? 'hover:bg-slate-700' : 'hover:bg-gray-50'
+                }`}>
+                  <div className="flex items-center justify-between">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 mb-1">
+                        <h4 className={`font-semibold ${
+                          isDarkMode ? 'text-white' : 'text-gray-900'
+                        }`}>
+                          {getSourceLabel(earning.source)}
+                        </h4>
+                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                          earning.source === 'mistake_found'
+                            ? isDarkMode
+                              ? 'bg-blue-900/30 text-blue-300'
+                              : 'bg-blue-100 text-blue-700'
+                            : isDarkMode
+                            ? 'bg-purple-900/30 text-purple-300'
+                            : 'bg-purple-100 text-purple-700'
+                        }`}>
+                          {getSourceLabel(earning.source)}
+                        </span>
+                      </div>
+                      {earning.description && (
+                        <p className={`text-sm ${
+                          isDarkMode ? 'text-gray-400' : 'text-gray-600'
+                        }`}>
+                          {earning.description}
+                        </p>
+                      )}
+                      <p className={`text-xs mt-1 ${
+                        isDarkMode ? 'text-gray-500' : 'text-gray-500'
+                      }`}>
+                        {new Date(earning.timestamp).toLocaleString('en-US', { 
+                          month: 'short', 
+                          day: 'numeric', 
+                          year: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit'
+                        })}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className={`text-2xl font-bold ${
+                        isDarkMode ? 'text-green-400' : 'text-green-600'
+                      }`}>
+                        +₹{earning.amount.toFixed(2)}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   // Render current page
   const renderPage = () => {
     switch (currentPage) {
@@ -409,6 +674,8 @@ const CheckerApp = ({
         return <DashboardPage />;
       case 'tasks':
         return <TasksPage />;
+      case 'wallet':
+        return <WalletPage />;
       case 'profile':
         return <ProfilePage />;
       case 'notifications':

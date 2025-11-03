@@ -60,6 +60,27 @@ const TaskStatusBadge = ({ status, size = 'md', showIcon = true }) => {
       textColor: 'text-orange-700',
       borderColor: 'border-orange-300',
       icon: AlertCircle
+    },
+    'initially-approved': {
+      label: 'Initially Approved - Pending TL Review',
+      bgColor: 'bg-yellow-100',
+      textColor: 'text-yellow-700',
+      borderColor: 'border-yellow-300',
+      icon: Clock
+    },
+    'team-leader-review': {
+      label: 'Under Team Leader Review',
+      bgColor: 'bg-indigo-100',
+      textColor: 'text-indigo-700',
+      borderColor: 'border-indigo-300',
+      icon: Eye
+    },
+    'finally-approved': {
+      label: 'Finally Approved / Completed',
+      bgColor: 'bg-green-100',
+      textColor: 'text-green-700',
+      borderColor: 'border-green-300',
+      icon: CheckCircle
     }
   };
 
