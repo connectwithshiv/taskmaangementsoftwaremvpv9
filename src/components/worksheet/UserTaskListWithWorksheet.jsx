@@ -412,6 +412,7 @@ import React, { useState, useEffect } from 'react';
 import { FileText, X, Send, AlertCircle, CheckCircle, Loader } from 'lucide-react';
 import TaskSubmissionFlow from './TaskSubmissionFlow';
 import CorrectionViewModal from './CorrectionViewModal';
+import TaskStatusBadge from '../task/TaskStatusBadge';
 
 /**
  * ==========================================
@@ -844,22 +845,7 @@ export const TaskCardWithWorksheet = ({
             </h3>
             
             {/* Status Badge */}
-            <span className={`px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wide ${
-              task.status === 'completed' ? 'bg-green-100 text-green-700' :
-              task.status === 'approved' ? 'bg-green-100 text-green-700' :
-              task.status === 'in-progress' ? 'bg-blue-100 text-blue-700' :
-              task.status === 'submitted' ? 'bg-yellow-100 text-yellow-700' :
-              task.status === 'under-review' ? 'bg-blue-100 text-blue-700' :
-              task.status === 'revision-required' ? 'bg-orange-100 text-orange-700' :
-              'bg-gray-100 text-gray-700'
-            }`}>
-              {task.status === 'in-progress' ? 'In Progress' : 
-               task.status === 'submitted' ? 'Submitted' :
-               task.status === 'under-review' ? 'Under Review' :
-               task.status === 'revision-required' ? 'Revision Required' :
-               task.status === 'approved' ? 'Approved' :
-               task.status}
-            </span>
+            <TaskStatusBadge status={task.status} size="sm" />
             
             {/* Priority Badge */}
             {task.priority && (

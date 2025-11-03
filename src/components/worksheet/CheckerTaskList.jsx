@@ -3,6 +3,7 @@ import { FileText, Search, AlertCircle, CheckCircle } from 'lucide-react';
 import TaskReviewModal from '../task/TaskReviewModal';
 import TaskService from '../../services/taskService';
 import { UserIdResolver } from '../user/UserIdResolver';
+import TaskStatusBadge from '../task/TaskStatusBadge';
 
 /**
  * Checker Task List Component
@@ -18,7 +19,7 @@ const CheckerTaskList = ({
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategoryId, setSelectedCategoryId] = useState('all');
-  const [filterStatus, setFilterStatus] = useState('submitted');
+  const [filterStatus, setFilterStatus] = useState('all');
   const [showReviewModal, setShowReviewModal] = useState(false);
   const [taskForReview, setTaskForReview] = useState(null);
 
@@ -94,7 +95,7 @@ const CheckerTaskList = ({
       } else if (filterStatus === 'submitted') {
         result = result.filter(t => t.status === 'submitted' || t.status === 'under-review');
       } else if (filterStatus === 'reviewed') {
-        result = result.filter(t => t.status === 'approved' || t.status === 'revision-required');
+        result = result.filter(t => t.status === 'approved' || t.status === 'revision-required' || t.status === 'initially-approved' || t.status === 'finally-approved');
       } else {
         result = result.filter(t => t.status === filterStatus);
       }
@@ -206,21 +207,7 @@ const CheckerTaskList = ({
                 {task.title}
               </h3>
               
-              <span className={`px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wide ${
-                task.status === 'approved' ? 'bg-green-100 text-green-700' :
-                task.status === 'revision-required' ? 'bg-orange-100 text-orange-700' :
-                task.status === 'submitted' ? 'bg-blue-100 text-blue-700' :
-                task.status === 'under-review' ? 'bg-blue-100 text-blue-700' :
-                task.status === 'in-progress' ? 'bg-blue-100 text-blue-700' :
-                'bg-gray-100 text-gray-700'
-              }`}>
-                {task.status === 'in-progress' ? 'In Progress' : 
-                 task.status === 'submitted' ? 'Submitted' :
-                 task.status === 'under-review' ? 'Under Review' :
-                 task.status === 'revision-required' ? 'Revision Required' :
-                 task.status === 'approved' ? 'Approved' :
-                 task.status}
-              </span>
+              <TaskStatusBadge status={task.status} size="sm" />
             </div>
 
             {/* Description */}
