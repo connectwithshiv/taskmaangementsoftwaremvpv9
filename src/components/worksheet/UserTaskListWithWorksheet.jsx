@@ -413,6 +413,8 @@ import { FileText, X, Send, AlertCircle, CheckCircle, Loader } from 'lucide-reac
 import TaskSubmissionFlow from './TaskSubmissionFlow';
 import CorrectionViewModal from './CorrectionViewModal';
 import TaskStatusBadge from '../task/TaskStatusBadge';
+import getWorkflowStatusForRole from '../../utils/workflowStatusHelper';
+import { validateNextStageDoerVisibility } from '../../utils/workflowStageValidator';
 
 /**
  * ==========================================
@@ -805,9 +807,29 @@ export const TaskCardWithWorksheet = ({
   onStatusChange, 
   onViewWorksheet,
   onShowCorrection,
-  isDarkMode = false 
+  isDarkMode = false,
+  isCurrentlyAssigned = true,
+  currentUser = null
 }) => {
   const isOverdue = task.dueDate && new Date(task.dueDate) < new Date() && task.status !== 'completed' && task.status !== 'approved';
+  
+  // Get workflow status for doer role
+  const workflowStatus = currentUser ? getWorkflowStatusForRole(task, 'doer', currentUser.id || currentUser.user_id) : null;
+  
+  // Debug logging for doer status
+  if (currentUser && (currentUser.username === 'doer2' || currentUser.username?.includes('doer2'))) {
+    console.log('🔍 Doer2 Status Check:', {
+      taskTitle: task.title,
+      taskStatus: task.status,
+      currentStage: task.currentStage,
+      assignedTo: task.assignedTo,
+      teamLeaderId: task.teamLeaderId,
+      workflowStatus: workflowStatus,
+      userId: currentUser.id || currentUser.user_id,
+      isCurrentlyAssigned: isCurrentlyAssigned,
+      stageHistory: task.stageHistory?.map(s => ({ stageOrder: s.stageOrder, userId: s.userId }))
+    });
+  }
   
   // Handle submit button click
   const handleSubmitClick = () => {
@@ -844,8 +866,24 @@ export const TaskCardWithWorksheet = ({
               {task.title}
             </h3>
             
-            {/* Status Badge */}
-            <TaskStatusBadge status={task.status} size="sm" />
+            {/* Status Badge - Show workflow status if available, otherwise default badge */}
+            {workflowStatus ? (
+              <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
+                workflowStatus.includes('Under TL Review')
+                  ? isDarkMode ? 'bg-blue-900/30 text-blue-400' : 'bg-blue-100 text-blue-700'
+                  : workflowStatus.includes('Pending') || workflowStatus.includes('Awaiting') 
+                  ? isDarkMode ? 'bg-yellow-900/30 text-yellow-400' : 'bg-yellow-100 text-yellow-700'
+                  : workflowStatus.includes('Completed') || workflowStatus.includes('Approved')
+                  ? isDarkMode ? 'bg-green-900/30 text-green-400' : 'bg-green-100 text-green-700'
+                  : workflowStatus.includes('Corrections Required')
+                  ? isDarkMode ? 'bg-orange-900/30 text-orange-400' : 'bg-orange-100 text-orange-700'
+                  : isDarkMode ? 'bg-blue-900/30 text-blue-400' : 'bg-blue-100 text-blue-700'
+              }`}>
+                {workflowStatus}
+              </span>
+            ) : (
+              <TaskStatusBadge status={task.status} size="sm" />
+            )}
             
             {/* Priority Badge */}
             {task.priority && (
@@ -983,8 +1021,34 @@ export const TaskCardWithWorksheet = ({
 
         {/* Actions */}
         <div className="flex flex-col gap-3 min-w-[120px]">
-          {/* Start Button */}
-          {(task.status === 'pending' || task.status === 'in-progress') && (
+          {/* Show workflow status message if user is not currently assigned and has workflow status */}
+          {!isCurrentlyAssigned && workflowStatus && (
+            <div className={`px-5 py-2.5 rounded-lg text-sm font-semibold flex items-center justify-center gap-2 ${
+              workflowStatus.includes('Under TL Review')
+                ? isDarkMode ? 'bg-blue-900/30 text-blue-400' : 'bg-blue-100 text-blue-700'
+                : workflowStatus.includes('Pending') || workflowStatus.includes('Awaiting')
+                ? isDarkMode ? 'bg-yellow-900/30 text-yellow-400' : 'bg-yellow-100 text-yellow-700'
+                : workflowStatus.includes('Completed') || workflowStatus.includes('Approved')
+                ? isDarkMode ? 'bg-green-900/30 text-green-400' : 'bg-green-100 text-green-700'
+                : workflowStatus.includes('Corrections Required')
+                ? isDarkMode ? 'bg-orange-900/30 text-orange-400' : 'bg-orange-100 text-orange-700'
+                : isDarkMode ? 'bg-blue-900/30 text-blue-400' : 'bg-blue-100 text-blue-700'
+            }`}>
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                {workflowStatus.includes('Completed') || workflowStatus.includes('Approved') ? (
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                ) : workflowStatus.includes('Pending') || workflowStatus.includes('Awaiting') ? (
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                ) : (
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                )}
+              </svg>
+              {workflowStatus}
+            </div>
+          )}
+
+          {/* Start Button - only show if currently assigned */}
+          {isCurrentlyAssigned && (task.status === 'pending' || task.status === 'in-progress') && (
             <button
               onClick={() => onStatusChange(task.id, 'in-progress')}
               disabled={task.status === 'in-progress' || task.status === 'completed'}
@@ -1004,8 +1068,15 @@ export const TaskCardWithWorksheet = ({
             </button>
           )}
 
-          {/* Submit Button */}
-          {task.status !== 'completed' && task.status !== 'approved' && task.status !== 'submitted' && task.status !== 'under-review' && (
+          {/* Submit Button - only show if currently assigned */}
+          {isCurrentlyAssigned && task.status !== 'completed' && 
+           task.status !== 'approved' && 
+           task.status !== 'submitted' && 
+           task.status !== 'under-review' && 
+           task.status !== 'initially-approved' && 
+           task.status !== 'finally-approved' && 
+           task.status !== 'team-leader-review' &&
+           !(task.status === 'revision-required' && task.correctionType === 'checker') && (
             <button
               onClick={handleSubmitClick}
               disabled={task.status === 'completed'}
@@ -1031,8 +1102,8 @@ export const TaskCardWithWorksheet = ({
             </button>
           )}
 
-          {/* Show Correction Button */}
-          {task.status === 'revision-required' && onShowCorrection && (
+          {/* Show Correction Button - only show if currently assigned */}
+          {isCurrentlyAssigned && task.status === 'revision-required' && onShowCorrection && task.correctionType !== 'checker' && (
             <button
               onClick={() => onShowCorrection(task)}
               className={`px-5 py-2.5 rounded-lg text-sm font-semibold transition-all duration-200 flex items-center justify-center gap-2 ${
@@ -1060,6 +1131,19 @@ export const TaskCardWithWorksheet = ({
               Under Review
             </div>
           )}
+
+          {/* Status Info for Team Leader Review - Checker Corrections */}
+          {task.status === 'revision-required' && task.correctionType === 'checker' && (
+            <div className={`px-5 py-2.5 rounded-lg text-sm font-semibold flex items-center justify-center gap-2 ${
+              isDarkMode ? 'bg-indigo-900/30 text-indigo-400' : 'bg-indigo-100 text-indigo-700'
+            }`}>
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              Awaiting Checker Corrections
+            </div>
+          )}
+
         </div>
       </div>
     </div>
@@ -1098,12 +1182,91 @@ export const UserTaskListWithWorksheet = ({
       // Get all possible user IDs
       const userIds = [currentUser.id, currentUser.user_id].filter(Boolean);
       
+      console.log('🔍 Loading tasks for user:', {
+        username: currentUser.username,
+        userIds: userIds,
+        currentUser: currentUser
+      });
+      
       const myTasks = allTasks.filter(task => {
-        const matches = userIds.includes(task.assignedTo);
-        if (matches) {
-          console.log('✅ Task matched:', task.title, 'assignedTo:', task.assignedTo);
+        // Check if currently assigned to this user
+        const isCurrentlyAssigned = userIds.includes(task.assignedTo);
+        
+        // CRITICAL FIX FOR CASE 2: Use robust validator to detect next stage doer
+        // After team leader approves, task moves to next stage with 'pending' status
+        let isNextStageDoerAfterTLApproval = false;
+        if (task.workflowId && task.userDependencyId && task.currentStage) {
+          const validation = validateNextStageDoerVisibility(task, currentUser.id || currentUser.user_id);
+          if (validation.shouldSee) {
+            isNextStageDoerAfterTLApproval = true;
+            console.log('✅ Next Stage Doer Detected (CASE 2 FIX):', validation.debug);
+          }
         }
-        return matches;
+        
+        // For workflow tasks, check if user worked on a COMPLETED stage (not current stage)
+        let workedOnCompletedStage = false;
+        let workedOnCurrentStage = false;
+        let isNextStageDoer = false;
+        if (task.workflowId && task.userDependencyId && task.stageHistory && task.currentStage) {
+          // Check if user worked on a completed stage (stage < currentStage)
+          workedOnCompletedStage = task.stageHistory.some(stage => {
+            const stageDoerId = stage.userId || stage.assignedTo;
+            const isDoerMatch = userIds.includes(stageDoerId);
+            // Only count if this stage is completed (less than current stage)
+            const isCompletedStage = stage.stageOrder < task.currentStage;
+            return isDoerMatch && isCompletedStage;
+          });
+          
+          // Check if user worked on the current stage (for showing "Under TL Review")
+          if (task.currentStage && task.stageHistory) {
+            const currentStageHistory = task.stageHistory.find(s => s.stageOrder === task.currentStage);
+            workedOnCurrentStage = currentStageHistory && (
+              userIds.includes(currentStageHistory.userId) || 
+              userIds.includes(currentStageHistory.assignedTo)
+            );
+          }
+          
+          // Check if user is the doer for NEXT stage (important for showing "Under TL Review")
+          if (window.UserDependencyService) {
+            try {
+              const nextStageAssignment = window.UserDependencyService.getNextStage(
+                task.userDependencyId,
+                task.currentStage
+              );
+              if (nextStageAssignment && userIds.includes(nextStageAssignment.userId)) {
+                isNextStageDoer = true;
+              }
+            } catch (e) {
+              // Error getting next stage
+            }
+          }
+        }
+        
+        // Show task if: 
+        // 1. Currently assigned (including next stage doer after TL approval - Case 2 fix)
+        // 2. OR user worked on current stage
+        // 3. OR task is under team leader review and user worked on that stage or is next stage doer
+        // 4. OR user worked on completed stage (will show "Stage Completed" status)
+        // 5. OR user is next stage doer (so they can see "Under TL Review" when task is with TL)
+        const shouldShow = isCurrentlyAssigned || isNextStageDoerAfterTLApproval || workedOnCurrentStage || 
+          (task.status === 'team-leader-review' && (workedOnCurrentStage || isNextStageDoer)) ||
+          workedOnCompletedStage || // Show completed stages too (will show "Stage Completed" status)
+          isNextStageDoer; // Show to next stage doer so they can see "Under TL Review"
+        
+        if (shouldShow) {
+          console.log('✅ Task matched:', {
+            title: task.title,
+            assignedTo: task.assignedTo,
+            status: task.status,
+            isCurrentlyAssigned,
+            workedOnCompletedStage,
+            workedOnCurrentStage,
+            currentStage: task.currentStage,
+            stageHistory: task.stageHistory?.map(s => ({ stageOrder: s.stageOrder, userId: s.userId }))
+          });
+        }
+        
+        return shouldShow;
       });
       
       setTasks(myTasks);
@@ -1111,7 +1274,7 @@ export const UserTaskListWithWorksheet = ({
       
       if (myTasks.length === 0 && allTasks.length > 0) {
         console.warn('⚠️ No tasks matched. User IDs:', userIds);
-        console.warn('📋 Available tasks:', allTasks.slice(0, 3).map(t => ({ 
+        console.warn('📋 All available tasks:', allTasks.map(t => ({ 
           title: t.title, 
           assignedTo: t.assignedTo,
           assignedToName: t.assignedToName,
@@ -1416,16 +1579,22 @@ export const UserTaskListWithWorksheet = ({
             </div>
             
             {/* Task cards */}
-            {filteredTasks.map(task => (
-              <TaskCardWithWorksheet
-                key={task.id}
-                task={task}
-                onStatusChange={handleStatusChange}
-                onViewWorksheet={handleViewWorksheet}
-                onShowCorrection={handleShowCorrection}
-                isDarkMode={isDarkMode}
-              />
-            ))}
+            {filteredTasks.map(task => {
+              const userIds = [currentUser.id, currentUser.user_id].filter(Boolean);
+              const isCurrentlyAssigned = userIds.includes(task.assignedTo);
+              return (
+                <TaskCardWithWorksheet
+                  key={task.id}
+                  task={task}
+                  onStatusChange={handleStatusChange}
+                  onViewWorksheet={handleViewWorksheet}
+                  onShowCorrection={handleShowCorrection}
+                  isDarkMode={isDarkMode}
+                  isCurrentlyAssigned={isCurrentlyAssigned}
+                  currentUser={currentUser}
+                />
+              );
+            })}
           </>
         )}
       </div>

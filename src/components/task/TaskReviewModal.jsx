@@ -42,7 +42,21 @@ const TaskReviewModal = ({
         checklist.items.forEach(item => {
           // Check if this item was approved in previous review
           const wasApproved = task.review?.approvedChecklistItems?.includes(item.id);
-          initialChecked[item.id] = wasApproved !== false; // Default to true if was previously approved
+          
+          // If Team Leader gave corrections and it's for checker, use TL's decision
+          const isCheckerCorrection = task.correctionType === 'checker' || task.correctionType === 'both';
+          const tlDecision = task.review?.teamLeaderCorrections?.tlDecision;
+          
+          if (isCheckerCorrection && tlDecision && tlDecision.hasOwnProperty(item.id)) {
+            // Use Team Leader's decision for checker corrections
+            initialChecked[item.id] = tlDecision[item.id] === true;
+          } else if (wasApproved) {
+            // Keep the previous approval status if it was approved
+            initialChecked[item.id] = true;
+          } else {
+            // Not approved in previous review
+            initialChecked[item.id] = false;
+          }
         });
         setAdminChecklist(initialChecked);
       } else if (checklist?.items) {
@@ -78,8 +92,9 @@ const TaskReviewModal = ({
   const handleApprove = async () => {
     setIsProcessing(true);
     
+    // Get checked items (approved checklist items)
     const approvedChecklistItems = checklist?.items
-      ? checklist.items.map(item => item.id)
+      ? checklist.items.filter(item => adminChecklist[item.id]).map(item => item.id)
       : [];
 
     await onApprove(approvedChecklistItems, feedback);
@@ -230,6 +245,28 @@ const TaskReviewModal = ({
               variant="default"
               isDarkMode={isDarkMode}
             >
+              {/* Team Leader Feedback Alert */}
+              {task?.review?.teamLeaderFeedback && task?.status === 'revision-required' && (task.correctionType === 'checker' || task.correctionType === 'both') && (
+                <AlertBox
+                  type="danger"
+                  message={
+                    <div>
+                      <p className={`text-sm font-semibold mb-2 ${isDarkMode ? 'text-red-400' : 'text-red-800'}`}>
+                        Team Leader Feedback:
+                      </p>
+                      <p className={`text-sm ${isDarkMode ? 'text-gray-300' : 'text-gray-800'}`}>
+                        {task.review.teamLeaderFeedback}
+                      </p>
+                      <p className={`text-xs mt-2 ${isDarkMode ? 'text-red-300' : 'text-red-700'}`}>
+                        Team Leader has marked some items with corrections needed. Review the checklist below and resubmit.
+                      </p>
+                    </div>
+                  }
+                  isDarkMode={isDarkMode}
+                  className="mb-4"
+                />
+              )}
+              
               <div className="space-y-3">
                 {checklist.items.map((item, idx) => (
                   <ChecklistItem
@@ -332,6 +369,7 @@ const TaskReviewModal = ({
               } focus:ring-2 focus:ring-yellow-500 focus:outline-none`}
             />
           </SectionCard>
+
         </div>
 
         {/* Footer Actions */}
@@ -351,37 +389,20 @@ const TaskReviewModal = ({
           </button>
 
           <div className="flex gap-3">
-            {allItemsApproved ? (
-              <button
-                onClick={handleApprove}
-                disabled={isProcessing}
-                className={`px-6 py-3 rounded-lg font-medium transition-colors flex items-center gap-2 ${
-                  isProcessing
-                    ? 'opacity-50 cursor-not-allowed'
-                    : isDarkMode
-                      ? 'bg-green-600 hover:bg-green-700 text-white'
-                      : 'bg-green-600 hover:bg-green-700 text-white'
-                }`}
-              >
-                <CheckCircle size={20} />
-                Approve Task
-              </button>
-            ) : (
-              <button
-                onClick={handleRequireRevision}
-                disabled={isProcessing}
-                className={`px-6 py-3 rounded-lg font-medium transition-colors flex items-center gap-2 ${
-                  isProcessing
-                    ? 'opacity-50 cursor-not-allowed'
-                    : isDarkMode
-                      ? 'bg-orange-600 hover:bg-orange-700 text-white'
-                      : 'bg-orange-600 hover:bg-orange-700 text-white'
-                }`}
-              >
-                <AlertCircle size={20} />
-                Submit Correction
-              </button>
-            )}
+            <button
+              onClick={handleApprove}
+              disabled={isProcessing}
+              className={`px-6 py-3 rounded-lg font-medium transition-colors flex items-center gap-2 ${
+                isProcessing
+                  ? 'opacity-50 cursor-not-allowed'
+                  : isDarkMode
+                    ? 'bg-green-600 hover:bg-green-700 text-white'
+                    : 'bg-green-600 hover:bg-green-700 text-white'
+              }`}
+            >
+              <CheckCircle size={20} />
+              Submit for TL Review
+            </button>
           </div>
         </div>
       </div>

@@ -50,8 +50,10 @@ export const UserDependencyService = {
 
   /**
    * Get user dependency by ID
+   * CRITICAL: Reload data before searching to ensure we have the latest data
    */
   getUserDependencyById: (dependencyId) => {
+    loadUserDependencies(); // Reload to ensure we have latest data
     return userDependencies.find(d => d.id === dependencyId);
   },
 
@@ -250,8 +252,10 @@ export const UserDependencyService = {
 
   /**
    * Get stage assignment for a specific stage
+   * CRITICAL: Reload data before searching to ensure we have the latest data
    */
   getStageAssignment: (dependencyId, stageOrder) => {
+    loadUserDependencies(); // Reload to ensure we have latest data
     const dependency = userDependencies.find(d => d.id === dependencyId);
     if (!dependency) return null;
 
@@ -260,21 +264,63 @@ export const UserDependencyService = {
 
   /**
    * Get next stage assignment in the chain
+   * CRITICAL: Reload data before searching to ensure we have the latest data
    */
   getNextStage: (dependencyId, currentStageOrder) => {
+    loadUserDependencies(); // Reload to ensure we have latest data
     const dependency = userDependencies.find(d => d.id === dependencyId);
-    if (!dependency) return null;
+    if (!dependency) {
+      console.warn('⚠️ getNextStage - Dependency not found:', dependencyId);
+      return null;
+    }
+
+    // CRITICAL: Ensure proper type conversion for stage order comparison
+    const currentStageNum = Number(currentStageOrder);
+    const nextStageOrder = currentStageNum + 1;
+    
+    console.log('🔍 getNextStage - Searching for next stage:', {
+      dependencyId: dependencyId,
+      currentStageOrder: currentStageOrder,
+      currentStageOrderType: typeof currentStageOrder,
+      currentStageNum: currentStageNum,
+      nextStageOrder: nextStageOrder,
+      totalStages: dependency.stageAssignments?.length || 0,
+      allStageOrders: dependency.stageAssignments?.map(s => ({
+        stageOrder: s.stageOrder,
+        stageOrderType: typeof s.stageOrder,
+        stageOrderNum: Number(s.stageOrder)
+      })) || []
+    });
 
     const nextStage = dependency.stageAssignments.find(
-      s => s.stageOrder === currentStageOrder + 1
+      s => Number(s.stageOrder) === nextStageOrder
     );
+    
+    if (!nextStage) {
+      console.warn('⚠️ getNextStage - Next stage not found:', {
+        dependencyId: dependencyId,
+        currentStageOrder: currentStageOrder,
+        nextStageOrder: nextStageOrder,
+        availableStages: dependency.stageAssignments?.map(s => Number(s.stageOrder)) || []
+      });
+    } else {
+      console.log('✅ getNextStage - Found next stage:', {
+        dependencyId: dependencyId,
+        currentStageOrder: currentStageOrder,
+        nextStageOrder: nextStageOrder,
+        nextStage: nextStage
+      });
+    }
+    
     return nextStage || null;
   },
 
   /**
    * Check if current stage is the last stage
+   * CRITICAL: Reload data before searching to ensure we have the latest data
    */
   isLastStage: (dependencyId, currentStageOrder) => {
+    loadUserDependencies(); // Reload to ensure we have latest data
     const dependency = userDependencies.find(d => d.id === dependencyId);
     if (!dependency) return true;
 

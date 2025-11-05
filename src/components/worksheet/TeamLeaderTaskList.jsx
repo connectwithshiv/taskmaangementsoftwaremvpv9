@@ -2,6 +2,21 @@ import React, { useState, useEffect } from 'react';
 import TaskService from '../../services/taskService';
 import TeamLeaderReviewModal from '../task/TeamLeaderReviewModal';
 import TaskStatusBadge from '../task/TaskStatusBadge';
+import { UserIdResolver } from '../user/UserIdResolver';
+import getWorkflowStatusForRole from '../../utils/workflowStatusHelper';
+import { validateTeamLeaderVisibility } from '../../utils/workflowStageValidator';
+
+// Import UserDependencyService to check stage assignments
+let UserDependencyService = null;
+if (typeof window !== 'undefined' && window.UserDependencyService) {
+  UserDependencyService = window.UserDependencyService;
+} else {
+  try {
+    UserDependencyService = require('../../services/userDependencyService').default;
+  } catch (e) {
+    // Service not available
+  }
+}
 
 const TeamLeaderTaskList = ({ 
   currentTeamLeader, 
@@ -23,11 +38,119 @@ const TeamLeaderTaskList = ({
     try {
       const allTasks = TaskService.getAllTasks();
       
-      // Filter tasks where this user is the team leader
-      const teamLeaderId = currentTeamLeader.id || currentTeamLeader.user_id;
+      // Use UserIdResolver to get canonical ID (handles all ID formats)
+      const teamLeaderId = UserIdResolver.getUserId(currentTeamLeader);
+      
+      const tasksWithTL = allTasks.filter(t => t.teamLeaderId);
+      const detailedTasks = tasksWithTL.map(t => ({
+        title: t.title,
+        teamLeaderId: t.teamLeaderId,
+        teamLeaderIdType: typeof t.teamLeaderId,
+        teamLeaderIdString: String(t.teamLeaderId),
+        status: t.status,
+        currentStage: t.currentStage,
+        assignedTo: t.assignedTo,
+        assignedToName: t.assignedToName,
+        workflowId: t.workflowId,
+        userDependencyId: t.userDependencyId,
+        idMatches: String(t.teamLeaderId) === String(teamLeaderId),
+        statusMatches: t.status === 'initially-approved' || t.status === 'team-leader-review'
+      }));
+      
+      console.log('🔍 TL Loading tasks:', {
+        teamLeaderName: currentTeamLeader.username || currentTeamLeader.name,
+        teamLeaderId: teamLeaderId,
+        teamLeaderIdType: typeof teamLeaderId,
+        teamLeaderIdString: String(teamLeaderId),
+        currentTeamLeader: {
+          id: currentTeamLeader.id,
+          user_id: currentTeamLeader.user_id
+        },
+        totalTasks: allTasks.length,
+        tasksWithTLCount: tasksWithTL.length,
+        detailedTasks: detailedTasks
+      });
+      
       const myTasks = allTasks.filter(task => {
-        return task.teamLeaderId && String(task.teamLeaderId) === String(teamLeaderId) &&
-               (task.status === 'initially-approved' || task.status === 'team-leader-review');
+        // CRITICAL FIX FOR CASE 1: Use robust validator to check if TL should see task
+        // This handles edge cases where same doer/checker appears in multiple stages
+        const validation = validateTeamLeaderVisibility(task, teamLeaderId);
+        
+        // Get if TL is assigned to current stage from validation
+        const tlAssignedToCurrentStage = validation.debug?.currentStageAssignment?.teamLeaderId === String(teamLeaderId);
+        const taskAssignedToTL = task.assignedTo && String(task.assignedTo) === String(teamLeaderId);
+        const taskTeamLeaderMatches = task.teamLeaderId && String(task.teamLeaderId) === String(teamLeaderId);
+        
+        // Team leader should see tasks if:
+        // 1. Validation says should see (for actionable statuses) - CASE 1 FIX
+        // 2. OR task is assigned to TL and status is actionable
+        // 3. OR TL is assigned to current stage and status is actionable/tracking/monitoring
+        
+        if (validation.shouldSee) {
+          console.log('✅ Team Leader SHOULD SEE task (CASE 1 FIX):', validation.debug);
+          return true; // Validator already checked everything
+        }
+        
+        // Check other cases where TL should see task
+        const actionableStatuses = ['team-leader-review', 'initially-approved'];
+        const trackingStatuses = ['revision-required'];
+        const monitoringStatuses = ['pending', 'submitted', 'under-review'];
+        
+        const isActionable = actionableStatuses.includes(task.status);
+        const isTracking = trackingStatuses.includes(task.status);
+        const isMonitoring = monitoringStatuses.includes(task.status);
+        
+        // If task is assigned to TL or TL is assigned to current stage, and status is actionable
+        if ((taskAssignedToTL || taskTeamLeaderMatches || tlAssignedToCurrentStage) && isActionable) {
+          console.log('✅ Team Leader SHOULD SEE task (actionable status):', {
+            taskTitle: task.title,
+            status: task.status,
+            taskAssignedToTL,
+            taskTeamLeaderMatches,
+            tlAssignedToCurrentStage
+          });
+          return true;
+        }
+        
+        // If tracking status and TL sent corrections or assigned to current stage
+        if (isTracking && (tlAssignedToCurrentStage || taskAssignedToTL || taskTeamLeaderMatches)) {
+          const tlSentCorrections = task.review?.teamLeaderReviewedBy === teamLeaderId || 
+            task.logs?.some(log => String(log.performedBy) === String(teamLeaderId) && log.action === 'team_leader_correction');
+          
+          if (tlSentCorrections || tlAssignedToCurrentStage) {
+            console.log('✅ Team Leader SHOULD SEE task (tracking status):', {
+              taskTitle: task.title,
+              status: task.status
+            });
+            return true;
+          }
+        }
+        
+        // If monitoring status and TL assigned to current stage
+        if (isMonitoring && tlAssignedToCurrentStage) {
+          console.log('✅ Team Leader SHOULD SEE task (monitoring status):', {
+            taskTitle: task.title,
+            status: task.status
+          });
+          return true;
+        }
+        
+        // If pending after TL approval (task moved to next stage where TL is assigned)
+        if (task.status === 'pending' && task.workflowId && tlAssignedToCurrentStage) {
+          console.log('✅ Team Leader SHOULD SEE task (pending after approval):', {
+            taskTitle: task.title,
+            status: task.status,
+            currentStage: task.currentStage
+          });
+          return true;
+        }
+        
+        // Only log failures for actionable statuses to avoid spam
+        if (task.status === 'team-leader-review' || task.status === 'initially-approved') {
+          console.log('❌ Team Leader should NOT see task:', validation.debug);
+        }
+        
+        return false;
       });
 
       setTasks(myTasks);
@@ -88,12 +211,13 @@ const TeamLeaderTaskList = ({
   };
 
   // Handle approve task
-  const handleApproveTask = async (feedback) => {
+  const handleApproveTask = async (feedback, approvedChecklistItems) => {
     try {
       const result = await TaskService.teamLeaderApprove(
         selectedTask.id,
         currentTeamLeader.id || currentTeamLeader.user_id,
-        feedback
+        feedback,
+        approvedChecklistItems
       );
       
       if (result.success) {
@@ -172,8 +296,11 @@ const TeamLeaderTaskList = ({
               className={`w-full px-4 py-2 rounded-lg border ${isDarkMode ? 'bg-slate-700 border-slate-600 text-white' : 'bg-white border-gray-300 text-gray-900'}`}
             >
               <option value="all">All Statuses</option>
+              <option value="team-leader-review">Awaiting My Review</option>
               <option value="initially-approved">Initially Approved</option>
-              <option value="team-leader-review">Under Review</option>
+              <option value="revision-required">Corrections Sent</option>
+              <option value="pending">Pending</option>
+              <option value="submitted">Submitted</option>
             </select>
           </div>
         </div>
@@ -203,7 +330,25 @@ const TeamLeaderTaskList = ({
                     <h3 className={`text-xl font-bold ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
                       {task.title}
                     </h3>
+                    {(() => {
+                      const teamLeaderId = UserIdResolver.getUserId(currentTeamLeader);
+                      const workflowStatus = getWorkflowStatusForRole(task, 'team-leader', teamLeaderId);
+                      return workflowStatus ? (
+                        <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
+                          workflowStatus.includes('Pending') || workflowStatus.includes('Awaiting')
+                            ? isDarkMode ? 'bg-yellow-900/30 text-yellow-400' : 'bg-yellow-100 text-yellow-700'
+                            : workflowStatus.includes('Completed') || workflowStatus.includes('Approved')
+                            ? isDarkMode ? 'bg-green-900/30 text-green-400' : 'bg-green-100 text-green-700'
+                            : workflowStatus.includes('Corrections Required')
+                            ? isDarkMode ? 'bg-orange-900/30 text-orange-400' : 'bg-orange-100 text-orange-700'
+                            : isDarkMode ? 'bg-blue-900/30 text-blue-400' : 'bg-blue-100 text-blue-700'
+                        }`}>
+                          {workflowStatus}
+                        </span>
+                      ) : (
                     <TaskStatusBadge status={task.status} size="sm" />
+                      );
+                    })()}
                   </div>
                   
                   {task.description && (

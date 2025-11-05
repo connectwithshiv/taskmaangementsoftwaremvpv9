@@ -62,17 +62,17 @@ const TaskStatusBadge = ({ status, size = 'md', showIcon = true }) => {
       icon: AlertCircle
     },
     'initially-approved': {
-      label: 'Initially Approved - Pending TL Review',
-      bgColor: 'bg-yellow-100',
-      textColor: 'text-yellow-700',
-      borderColor: 'border-yellow-300',
-      icon: Clock
+      label: 'Under TL Review',
+      bgColor: 'bg-blue-100',
+      textColor: 'text-blue-700',
+      borderColor: 'border-blue-300',
+      icon: Eye
     },
     'team-leader-review': {
-      label: 'Under Team Leader Review',
-      bgColor: 'bg-indigo-100',
-      textColor: 'text-indigo-700',
-      borderColor: 'border-indigo-300',
+      label: 'Under TL Review',
+      bgColor: 'bg-blue-100',
+      textColor: 'text-blue-700',
+      borderColor: 'border-blue-300',
       icon: Eye
     },
     'finally-approved': {
@@ -106,19 +106,25 @@ const TaskStatusBadge = ({ status, size = 'md', showIcon = true }) => {
   const sizeStyle = sizeConfig[size];
   const Icon = config.icon;
 
+  // Special handling for "Under TL Review" - make it match the inline span style (no border, no icon, same padding)
+  const isUnderTLReview = status === 'initially-approved' || status === 'team-leader-review';
+  
+  // Use same padding as inline span (px-3 py-1) for "Under TL Review" to match workflow status badge
+  const paddingClass = isUnderTLReview ? 'px-3 py-1' : sizeStyle.padding;
+  const fontWeightClass = isUnderTLReview ? 'font-semibold' : 'font-medium';
+  
   return (
     <span className={`
       inline-flex items-center gap-1.5 
       ${config.bgColor} 
       ${config.textColor} 
-      ${sizeStyle.padding} 
+      ${paddingClass} 
       ${sizeStyle.fontSize}
       rounded-full 
-      font-medium 
-      border 
-      ${config.borderColor}
+      ${fontWeightClass} 
+      ${isUnderTLReview ? '' : `border ${config.borderColor}`}
     `}>
-      {showIcon && <Icon size={sizeStyle.iconSize} />}
+      {showIcon && !isUnderTLReview && <Icon size={sizeStyle.iconSize} />}
       {config.label}
     </span>
   );

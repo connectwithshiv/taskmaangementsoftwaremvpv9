@@ -4,6 +4,19 @@ import TaskReviewModal from '../task/TaskReviewModal';
 import TaskService from '../../services/taskService';
 import { UserIdResolver } from '../user/UserIdResolver';
 import TaskStatusBadge from '../task/TaskStatusBadge';
+import getWorkflowStatusForRole from '../../utils/workflowStatusHelper';
+
+// Import UserDependencyService to check stage assignments
+let UserDependencyService = null;
+if (typeof window !== 'undefined' && window.UserDependencyService) {
+  UserDependencyService = window.UserDependencyService;
+} else {
+  try {
+    UserDependencyService = require('../../services/userDependencyService').default;
+  } catch (e) {
+    // Service not available
+  }
+}
 
 /**
  * Checker Task List Component
@@ -43,11 +56,28 @@ const CheckerTaskList = ({
         totalTasks: allTasks.length
       });
       
-      // Filter tasks where this checker is assigned
+      // Filter tasks where this checker is assigned OR worked on a COMPLETED stage
       const myTasks = allTasks.filter(task => {
-        const matches = String(task.checkerId) === String(checkerId);
+        // Check if currently assigned as checker
+        const isCurrentlyAssigned = String(task.checkerId) === String(checkerId);
+        
+        // For workflow tasks, check if checker worked on a COMPLETED stage (not current stage)
+        let workedOnCompletedStage = false;
+        if (task.workflowId && task.userDependencyId && task.stageHistory && task.stageHistory.length > 0) {
+          // Check if checker worked on any stage that is LESS than currentStage (completed stage)
+          workedOnCompletedStage = task.stageHistory.some(stage => {
+            const stageCheckerId = stage.checkerId || stage.reviewedBy;
+            const isCheckerMatch = String(stageCheckerId) === String(checkerId);
+            // Only count if this stage is completed (less than current stage)
+            const isCompletedStage = stage.stageOrder < task.currentStage;
+            return isCheckerMatch && isCompletedStage;
+          });
+        }
+        
+        const matches = isCurrentlyAssigned || workedOnCompletedStage;
+        
         if (matches) {
-          console.log('✅ Task matched:', task.title, 'checkerId:', task.checkerId, 'type:', typeof task.checkerId);
+          console.log('✅ Task matched:', task.title, 'checkerId:', task.checkerId, 'status:', task.status, 'correctionType:', task.correctionType, 'isCurrentlyAssigned:', isCurrentlyAssigned, 'workedOnCompletedStage:', workedOnCompletedStage, 'currentStage:', task.currentStage);
         }
         return matches;
       });
@@ -55,11 +85,13 @@ const CheckerTaskList = ({
       // Also show tasks that didn't match for debugging
       const tasksWithChecker = allTasks.filter(t => t.checkerId);
       if (tasksWithChecker.length > 0) {
-        console.log('🔍 Tasks with checker assigned:', tasksWithChecker.map(t => ({
+        console.log('🔍 All tasks with checker assigned:', tasksWithChecker.map(t => ({
           title: t.title,
           checkerId: t.checkerId,
           checkerIdType: typeof t.checkerId,
-          checkerName: t.checkerName
+          checkerName: t.checkerName,
+          status: t.status,
+          correctionType: t.correctionType
         })));
       }
       
@@ -71,6 +103,7 @@ const CheckerTaskList = ({
       
       if (myTasks.length === 0 && tasksWithChecker.length > 0) {
         console.warn('⚠️ No tasks matched but tasks with checker exist. Checking ID format...');
+        console.warn('Looking for checkerId:', checkerId, 'but found:', tasksWithChecker[0]?.checkerId);
       }
     } catch (error) {
       console.error('Error loading checker tasks:', error);
@@ -138,13 +171,28 @@ const CheckerTaskList = ({
   // Handle approve task
   const handleApproveTask = async (approvedChecklistItems, feedback) => {
     try {
+      const checkerId = UserIdResolver.getUserId(currentChecker);
+      
+      console.log('🔍 Checker approving task:', {
+        taskId: taskForReview.id,
+        taskTitle: taskForReview.title,
+        checkerId: checkerId,
+        taskWorkflowId: taskForReview.workflowId,
+        taskUserDependencyId: taskForReview.userDependencyId,
+        taskCurrentStage: taskForReview.currentStage,
+        taskTeamLeaderId: taskForReview.teamLeaderId,
+        taskStatus: taskForReview.status
+      });
+      
       const result = await TaskService.approveTask(
         taskForReview.id,
-        currentChecker.id || currentChecker.user_id,
+        checkerId,
         feedback,
         null,
         approvedChecklistItems
       );
+      
+      console.log('🔍 Checker approval result:', result);
       
       if (result.success) {
         alert('✅ Task approved successfully!');
@@ -187,6 +235,8 @@ const CheckerTaskList = ({
   // Task Card Component
   const TaskCard = ({ task }) => {
     const isOverdue = task.dueDate && new Date(task.dueDate) < new Date() && task.status !== 'approved';
+    const checkerId = UserIdResolver.getUserId(currentChecker);
+    const workflowStatus = getWorkflowStatusForRole(task, 'checker', checkerId);
     
     return (
       <div className={`p-6 rounded-lg ${
@@ -207,7 +257,21 @@ const CheckerTaskList = ({
                 {task.title}
               </h3>
               
-              <TaskStatusBadge status={task.status} size="sm" />
+              {workflowStatus ? (
+                <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
+                  workflowStatus.includes('Pending') || workflowStatus.includes('Awaiting')
+                    ? isDarkMode ? 'bg-yellow-900/30 text-yellow-400' : 'bg-yellow-100 text-yellow-700'
+                    : workflowStatus.includes('Completed') || workflowStatus.includes('Approved')
+                    ? isDarkMode ? 'bg-green-900/30 text-green-400' : 'bg-green-100 text-green-700'
+                    : workflowStatus.includes('Corrections Required')
+                    ? isDarkMode ? 'bg-orange-900/30 text-orange-400' : 'bg-orange-100 text-orange-700'
+                    : isDarkMode ? 'bg-blue-900/30 text-blue-400' : 'bg-blue-100 text-blue-700'
+                }`}>
+                  {workflowStatus}
+                </span>
+              ) : (
+                <TaskStatusBadge status={task.status} size="sm" />
+              )}
             </div>
 
             {/* Description */}
@@ -280,13 +344,18 @@ const CheckerTaskList = ({
           {/* Actions */}
           <div className="flex flex-col gap-3 min-w-[140px]">
             {/* Review Button */}
-            {(task.status === 'submitted' || task.status === 'under-review') && (
+            {(task.status === 'submitted' || task.status === 'under-review' || 
+              (task.status === 'revision-required' && (task.correctionType === 'checker' || task.correctionType === 'both'))) && (
               <button
                 onClick={() => handleReviewTask(task)}
-                className="px-5 py-2.5 rounded-lg text-sm font-semibold transition-all duration-200 flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white shadow-md hover:shadow-lg transform hover:-translate-y-0.5"
+                className={`px-5 py-2.5 rounded-lg text-sm font-semibold transition-all duration-200 flex items-center justify-center gap-2 ${
+                  task.status === 'revision-required' 
+                    ? 'bg-orange-600 hover:bg-orange-700 text-white'
+                    : 'bg-blue-600 hover:bg-blue-700 text-white'
+                } shadow-md hover:shadow-lg transform hover:-translate-y-0.5`}
               >
                 <CheckCircle size={20} />
-                Review Task
+                {task.status === 'revision-required' ? 'Review Corrections' : 'Review Task'}
               </button>
             )}
 
@@ -300,15 +369,34 @@ const CheckerTaskList = ({
               </div>
             )}
 
-            {/* Reviewed Status */}
-            {(task.status === 'approved' || task.status === 'revision-required') && (
+
+            {/* Status Message - Show workflow status if available */}
+            {workflowStatus && (
               <div className={`px-5 py-2.5 rounded-lg text-sm font-semibold flex items-center justify-center gap-2 ${
-                task.status === 'approved'
+                workflowStatus.includes('Pending') || workflowStatus.includes('Awaiting')
+                  ? isDarkMode ? 'bg-yellow-900/30 text-yellow-400' : 'bg-yellow-100 text-yellow-700'
+                  : workflowStatus.includes('Completed') || workflowStatus.includes('Approved')
+                  ? isDarkMode ? 'bg-green-900/30 text-green-400' : 'bg-green-100 text-green-700'
+                  : workflowStatus.includes('Corrections Required')
+                  ? isDarkMode ? 'bg-orange-900/30 text-orange-400' : 'bg-orange-100 text-orange-700'
+                  : isDarkMode ? 'bg-blue-900/30 text-blue-400' : 'bg-blue-100 text-blue-700'
+              }`}>
+                <CheckCircle size={20} />
+                {workflowStatus}
+              </div>
+            )}
+            
+            {/* Fallback Reviewed Status for non-workflow tasks */}
+            {!workflowStatus && (task.status === 'approved' || 
+              (task.status === 'revision-required' && task.correctionType === 'doer') ||
+              (task.status === 'finally-approved')) && (
+              <div className={`px-5 py-2.5 rounded-lg text-sm font-semibold flex items-center justify-center gap-2 ${
+                task.status === 'approved' || task.status === 'finally-approved'
                   ? isDarkMode ? 'bg-green-900/30 text-green-400' : 'bg-green-100 text-green-700'
                   : isDarkMode ? 'bg-orange-900/30 text-orange-400' : 'bg-orange-100 text-orange-700'
               }`}>
                 <CheckCircle size={20} />
-                Reviewed
+                {task.status === 'finally-approved' ? 'Completed' : 'Reviewed'}
               </div>
             )}
           </div>
