@@ -1,6 +1,6 @@
 // components/user/UserHeader.jsx - Header for Regular Users
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   MdMenu,
   MdNotifications,
@@ -12,6 +12,8 @@ import {
   MdAccountBalanceWallet,
   MdExpandMore
 } from 'react-icons/md';
+import WalletService from '../../services/walletService';
+import { UserIdResolver } from './UserIdResolver';
 
 const UserHeader = ({ 
   onToggleSidebar,
@@ -23,6 +25,7 @@ const UserHeader = ({
 }) => {
   const [showNotifications, setShowNotifications] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const [walletBalance, setWalletBalance] = useState(0);
 
   // Sample notifications
   const notifications = [
@@ -32,6 +35,34 @@ const UserHeader = ({
   ];
 
   const unreadCount = notifications.filter(n => n.unread).length;
+
+  // Load wallet balance
+  useEffect(() => {
+    const loadWalletBalance = () => {
+      if (currentUser) {
+        try {
+          const userId = UserIdResolver.getUserId(currentUser);
+          const walletStats = WalletService.getUserStats(userId);
+          setWalletBalance(walletStats.balance || 0);
+        } catch (error) {
+          console.error('Error loading wallet balance:', error);
+          setWalletBalance(0);
+        }
+      }
+    };
+
+    loadWalletBalance();
+
+    // Listen for wallet updates
+    const handleWalletUpdate = () => {
+      loadWalletBalance();
+    };
+
+    window.addEventListener('walletsUpdated', handleWalletUpdate);
+    return () => {
+      window.removeEventListener('walletsUpdated', handleWalletUpdate);
+    };
+  }, [currentUser]);
 
   return (
     <header className={`h-16 border-b flex items-center justify-between px-4 lg:px-6 ${
@@ -67,13 +98,17 @@ const UserHeader = ({
       {/* Right Side */}
       <div className="flex items-center gap-2">
         {/* Wallet Balance */}
-        <div className={`hidden md:flex items-center gap-2 px-4 py-2 rounded-lg border ${
-          isDarkMode 
-            ? 'bg-slate-700 border-slate-600' 
-            : 'bg-slate-50 border-slate-200'
-        }`}>
-          <MdAccountBalanceWallet className="text-green-500" size={20} />
-          <div>
+        <div 
+          onClick={() => onNavigate && onNavigate('wallet')}
+          className={`flex items-center gap-2 px-2 md:px-4 py-2 rounded-lg border cursor-pointer transition-colors ${
+            isDarkMode 
+              ? 'bg-slate-700 border-slate-600 hover:bg-slate-600' 
+              : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
+          }`}
+          title="Click to view wallet details"
+        >
+          <MdAccountBalanceWallet className="text-green-500 flex-shrink-0" size={20} />
+          <div className="hidden sm:block">
             <p className={`text-xs ${
               isDarkMode ? 'text-slate-400' : 'text-slate-500'
             }`}>
@@ -82,7 +117,14 @@ const UserHeader = ({
             <p className={`font-bold text-sm ${
               isDarkMode ? 'text-white' : 'text-slate-900'
             }`}>
-              $2,450.00
+              ₹{walletBalance.toFixed(2)}
+            </p>
+          </div>
+          <div className="sm:hidden">
+            <p className={`font-bold text-sm ${
+              isDarkMode ? 'text-white' : 'text-slate-900'
+            }`}>
+              ₹{walletBalance.toFixed(2)}
             </p>
           </div>
         </div>

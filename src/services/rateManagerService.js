@@ -198,11 +198,12 @@ export const RateManagerService = {
   },
 
   /**
-   * Calculate checker earnings (per mistake found)
+   * Calculate checker earnings (per mistake found + base credit for checking)
    * @param {string} categoryId
    * @param {number} mistakesCount - Number of unchecked/incorrect items
+   * @param {boolean} stageCompleted - Whether the stage is completed (checker gets base credit)
    */
-  calculateCheckerEarnings: (categoryId, mistakesCount) => {
+  calculateCheckerEarnings: (categoryId, mistakesCount = 0, stageCompleted = true) => {
     const rate = RateManagerService.getRateByCategoryId(categoryId);
     if (!rate || rate.status !== 'active') {
       return 0;
@@ -211,9 +212,16 @@ export const RateManagerService = {
     const doerRate = rate.doerRate || 0;
     const checkerRatePerMistake = rate.checkerRatePerMistake || 0;
     
-    // Calculate: (doerRate * checkerRatePerMistake / 100) * mistakesCount
+    // Base credit for checker when stage is completed (checkerRatePerMistake as percentage of doerRate)
+    // If checkerRatePerMistake is set, use it as base percentage; otherwise use a default
+    const baseCheckerCredit = (doerRate * checkerRatePerMistake) / 100;
+    
+    // Additional credit for mistakes found: (doerRate * checkerRatePerMistake / 100) * mistakesCount
     const earningsPerMistake = (doerRate * checkerRatePerMistake) / 100;
-    return earningsPerMistake * mistakesCount;
+    const mistakeEarnings = earningsPerMistake * mistakesCount;
+    
+    // Checker gets base credit when stage is completed, plus additional credit for mistakes
+    return stageCompleted ? (baseCheckerCredit + mistakeEarnings) : mistakeEarnings;
   }
 };
 

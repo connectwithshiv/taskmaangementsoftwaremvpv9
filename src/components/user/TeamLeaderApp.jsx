@@ -475,7 +475,7 @@ const TeamLeaderApp = ({
     const getSourceLabel = (source) => {
       const labels = {
         'task_completion': 'Task Approved',
-        'mistake_found': 'Mistakes Found',
+        'mistake_found': 'Mistakes Approved',
         'bonus': 'Bonus',
         'adjustment': 'Adjustment'
       };
@@ -609,7 +609,8 @@ const TeamLeaderApp = ({
                 }`}
               >
                 <option value="all">All Sources</option>
-                <option value="mistake_found">Mistakes Found</option>
+                <option value="task_completion">Task Approved</option>
+                <option value="mistake_found">Mistakes Approved</option>
                 <option value="bonus">Bonus</option>
               </select>
             </div>
@@ -639,13 +640,13 @@ const TeamLeaderApp = ({
                           {getSourceLabel(earning.source)}
                         </h4>
                         <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                          earning.source === 'mistake_found'
+                          (earning.source === 'task_completion' || earning.source === 'mistake_found')
                             ? isDarkMode
-                              ? 'bg-blue-900/30 text-blue-300'
-                              : 'bg-blue-100 text-blue-700'
+                              ? 'bg-blue-900/30 text-blue-300 border border-blue-700/50'
+                              : 'bg-blue-100 text-blue-700 border border-blue-300'
                             : isDarkMode
-                            ? 'bg-purple-900/30 text-purple-300'
-                            : 'bg-purple-100 text-purple-700'
+                            ? 'bg-purple-900/30 text-purple-300 border border-purple-700/50'
+                            : 'bg-purple-100 text-purple-700 border border-purple-300'
                         }`}>
                           {getSourceLabel(earning.source)}
                         </span>
@@ -723,6 +724,8 @@ const TeamLeaderApp = ({
           onToggle={() => setSidebarOpen(!sidebarOpen)}
           isDarkMode={isDarkMode}
           setIsDarkMode={setIsDarkMode}
+          onNavigate={handleNavigate}
+          onLogout={onLogout}
         />
 
         <main className="min-h-screen">

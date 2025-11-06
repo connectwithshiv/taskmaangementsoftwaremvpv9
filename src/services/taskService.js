@@ -115,6 +115,7 @@ const TaskService = {
         userDependencyName: taskData.userDependencyName || null,
         currentStage: taskData.currentStage !== undefined ? taskData.currentStage : 0,
         stageHistory: taskData.stageHistory || [],
+        stageCumulativeMistakes: taskData.stageCumulativeMistakes || {}, // Track cumulative mistakes per stage
         isWorkflowComplete: false,
         createdAt: now,
         updatedAt: now,
@@ -813,6 +814,33 @@ const TaskService = {
           assignment: currentStageAssignment
         });
         
+        // Calculate mistakes found in this review cycle
+        const checklist = ChecklistService.getChecklistByCategory(task.categoryId);
+        let currentMistakesCount = 0;
+        if (checklist && checklist.items && checklist.items.length > 0) {
+          const totalItems = checklist.items.length;
+          const approvedCount = approvedChecklistItems.length;
+          currentMistakesCount = totalItems - approvedCount;
+        }
+        
+        // Initialize cumulative mistakes tracking per stage if not exists
+        if (!task.stageCumulativeMistakes) {
+          task.stageCumulativeMistakes = {};
+        }
+        
+        // Accumulate mistakes for current stage
+        const stageKey = `stage_${task.currentStage}`;
+        const previousMistakes = task.stageCumulativeMistakes[stageKey] || 0;
+        task.stageCumulativeMistakes[stageKey] = previousMistakes + currentMistakesCount;
+        
+        console.log('📊 Cumulative mistakes tracking:', {
+          stage: task.currentStage,
+          stageKey: stageKey,
+          currentMistakesFound: currentMistakesCount,
+          previousCumulative: previousMistakes,
+          newCumulative: task.stageCumulativeMistakes[stageKey]
+        });
+        
         // Save current stage output
         const currentStageHistory = {
           stageOrder: task.currentStage,
@@ -830,7 +858,9 @@ const TaskService = {
           approvedAt: now,
           approvedBy: adminId,
           reviewedBy: adminId, // Also store as reviewedBy for consistency
-          approvedChecklistItems: approvedChecklistItems || [] // Store approved checklist items
+          approvedChecklistItems: approvedChecklistItems || [], // Store approved checklist items
+          mistakesFoundInThisReview: currentMistakesCount, // Store mistakes found in this review cycle
+          cumulativeMistakesAtThisPoint: task.stageCumulativeMistakes[stageKey] // Store cumulative mistakes
         };
         
         const updatedStageHistory = [...(task.stageHistory || []), currentStageHistory];
@@ -1010,33 +1040,46 @@ const TaskService = {
               console.log('✅ Doer payout result:', result);
             }
 
-            // Calculate checker earnings
+            // Calculate checker earnings using cumulative mistakes for this stage
             const checklist = ChecklistService.getChecklistByCategory(task.categoryId);
             console.log('📋 Checklist found:', checklist ? 'Yes' : 'No');
             
-            if (checklist && checklist.items && checklist.items.length > 0) {
-              const totalItems = checklist.items.length;
-              const approvedCount = approvedChecklistItems.length;
-              const mistakesCount = totalItems - approvedCount;
+            // Get cumulative mistakes for current stage
+            const stageKey = `stage_${task.currentStage}`;
+            const cumulativeMistakes = task.stageCumulativeMistakes?.[stageKey] || 0;
+            
+            console.log('🔍 Workflow checklist analysis (final payment):', { 
+              stage: task.currentStage,
+              stageKey: stageKey,
+              cumulativeMistakes: cumulativeMistakes,
+              totalItems: checklist?.items?.length || 0,
+              approvedCount: approvedChecklistItems.length
+            });
+            
+            // Checker gets credit when stage is completed (base credit + cumulative mistake credit)
+            if (adminId) {
+              const checkerEarnings = RateManagerService.calculateCheckerEarnings(task.categoryId, cumulativeMistakes, true);
+              console.log('📊 Checker earnings calculated (final):', checkerEarnings, 'for', cumulativeMistakes, 'cumulative mistakes, stage completed: true');
               
-              console.log('🔍 Workflow checklist analysis:', { totalItems, approvedCount, mistakesCount });
-              
-              if (mistakesCount > 0 && adminId) {
-                const checkerEarnings = RateManagerService.calculateCheckerEarnings(task.categoryId, mistakesCount);
-                console.log('📊 Checker earnings calculated:', checkerEarnings, 'for', mistakesCount, 'mistakes');
-                
-                if (checkerEarnings > 0) {
-                  const result = WalletService.addEarnings({
-                    userId: adminId,
-                    amount: checkerEarnings,
-                    source: 'mistake_found',
-                    taskId: task.id,
-                    categoryId: task.categoryId,
-                    description: `Found ${mistakesCount} mistake(s) in workflow: ${task.title}`,
-                    metadata: { mistakesCount, approvedCount, totalItems, workflowComplete: true }
-                  });
-                  console.log('✅ Checker payout result:', result);
-                }
+              if (checkerEarnings > 0) {
+                const result = WalletService.addEarnings({
+                  userId: adminId,
+                  amount: checkerEarnings,
+                  source: cumulativeMistakes > 0 ? 'mistake_found' : 'task_completion',
+                  taskId: task.id,
+                  categoryId: task.categoryId,
+                  description: cumulativeMistakes > 0 
+                    ? `Stage completed with ${cumulativeMistakes} total mistake(s) found across all reviews: ${task.title}` 
+                    : `Workflow completed: ${task.title}`,
+                  metadata: { 
+                    cumulativeMistakes: cumulativeMistakes,
+                    stage: task.currentStage,
+                    approvedCount: approvedChecklistItems.length, 
+                    totalItems: checklist?.items?.length || 0, 
+                    workflowComplete: true 
+                  }
+                });
+                console.log('✅ Checker payout result (final):', result);
               }
             }
           } catch (payoutError) {
@@ -1157,27 +1200,44 @@ const TaskService = {
               console.log('✅ Doer payout result:', result);
             }
 
-            // Calculate checker earnings for intermediate stage
+            // Calculate checker earnings for intermediate stage using cumulative mistakes
             const checklist = ChecklistService.getChecklistByCategory(completedStageCategoryId);
-            if (checklist && checklist.items && checklist.items.length > 0) {
-              const totalItems = checklist.items.length;
-              const approvedCount = approvedChecklistItems.length;
-              const mistakesCount = totalItems - approvedCount;
+            
+            // Get cumulative mistakes for completed stage
+            const completedStageKey = `stage_${oldStage}`;
+            const cumulativeMistakes = task.stageCumulativeMistakes?.[completedStageKey] || 0;
+            
+            console.log('🔍 Intermediate stage checklist analysis (final payment):', { 
+              stage: oldStage,
+              stageKey: completedStageKey,
+              cumulativeMistakes: cumulativeMistakes,
+              totalItems: checklist?.items?.length || 0,
+              approvedCount: approvedChecklistItems.length
+            });
+            
+            // Checker gets credit when stage is completed (base credit + cumulative mistake credit)
+            if (adminId) {
+              const checkerEarnings = RateManagerService.calculateCheckerEarnings(completedStageCategoryId, cumulativeMistakes, true);
+              console.log('📊 Checker earnings calculated (intermediate final):', checkerEarnings, 'for', cumulativeMistakes, 'cumulative mistakes');
               
-              if (mistakesCount > 0 && adminId) {
-                const checkerEarnings = RateManagerService.calculateCheckerEarnings(completedStageCategoryId, mistakesCount);
-                if (checkerEarnings > 0) {
-                  const result = WalletService.addEarnings({
-                    userId: adminId,
-                    amount: checkerEarnings,
-                    source: 'mistake_found',
-                    taskId: task.id,
-                    categoryId: completedStageCategoryId,
-                    description: `Found ${mistakesCount} mistake(s) at stage ${oldStage}: ${task.title}`,
-                    metadata: { mistakesCount, approvedCount, totalItems, stage: oldStage }
-                  });
-                  console.log('✅ Checker payout result:', result);
-                }
+              if (checkerEarnings > 0) {
+                const result = WalletService.addEarnings({
+                  userId: adminId,
+                  amount: checkerEarnings,
+                  source: cumulativeMistakes > 0 ? 'mistake_found' : 'task_completion',
+                  taskId: task.id,
+                  categoryId: completedStageCategoryId,
+                  description: cumulativeMistakes > 0 
+                    ? `Stage ${oldStage} completed with ${cumulativeMistakes} total mistake(s) found across all reviews: ${task.title}` 
+                    : `Stage ${oldStage} completed: ${task.title}`,
+                  metadata: { 
+                    cumulativeMistakes: cumulativeMistakes,
+                    stage: oldStage,
+                    approvedCount: approvedChecklistItems.length, 
+                    totalItems: checklist?.items?.length || 0
+                  }
+                });
+                console.log('✅ Checker payout result (intermediate final):', result);
               }
             }
           } catch (payoutError) {
@@ -1269,38 +1329,46 @@ const TaskService = {
               console.log('✅ Doer payout result:', result);
             }
 
-            // Calculate checker earnings (per mistake found)
+            // Calculate checker earnings using cumulative mistakes for non-workflow tasks
             const checklist = ChecklistService.getChecklistByCategory(task.categoryId);
             console.log('📋 Checklist found:', checklist ? 'Yes' : 'No', 'for category:', task.categoryId);
             
-            if (checklist && checklist.items && checklist.items.length > 0) {
-              const totalItems = checklist.items.length;
-              const approvedCount = approvedChecklistItems.length;
-              const mistakesCount = totalItems - approvedCount;
+            // Get cumulative mistakes for current stage (stage 0 for non-workflow)
+            const currentStage = task.currentStage || 0;
+            const stageKey = `stage_${currentStage}`;
+            const cumulativeMistakes = task.stageCumulativeMistakes?.[stageKey] || 0;
+            
+            console.log('🔍 Checklist analysis (final payment - non-workflow):', {
+              stage: currentStage,
+              stageKey: stageKey,
+              cumulativeMistakes: cumulativeMistakes,
+              totalItems: checklist?.items?.length || 0,
+              approvedCount: approvedChecklistItems.length
+            });
+            
+            // Checker gets credit when task is completed (base credit + cumulative mistake credit)
+            if (adminId) {
+              const checkerEarnings = RateManagerService.calculateCheckerEarnings(task.categoryId, cumulativeMistakes, true);
+              console.log('📊 Checker earnings calculated (final - non-workflow):', checkerEarnings, 'for', cumulativeMistakes, 'cumulative mistakes, stage completed: true');
               
-              console.log('🔍 Checklist analysis:', {
-                totalItems,
-                approvedCount,
-                mistakesCount,
-                approvedChecklistItems
-              });
-              
-              if (mistakesCount > 0 && adminId) {
-                const checkerEarnings = RateManagerService.calculateCheckerEarnings(task.categoryId, mistakesCount);
-                console.log('📊 Checker earnings calculated:', checkerEarnings, 'for', mistakesCount, 'mistakes');
-                
-                if (checkerEarnings > 0) {
-                  const result = WalletService.addEarnings({
-                    userId: adminId,
-                    amount: checkerEarnings,
-                    source: 'mistake_found',
-                    taskId: task.id,
-                    categoryId: task.categoryId,
-                    description: `Found ${mistakesCount} mistake(s) in: ${task.title}`,
-                    metadata: { mistakesCount, approvedCount, totalItems }
-                  });
-                  console.log('✅ Checker payout result:', result);
-                }
+              if (checkerEarnings > 0) {
+                const result = WalletService.addEarnings({
+                  userId: adminId,
+                  amount: checkerEarnings,
+                  source: cumulativeMistakes > 0 ? 'mistake_found' : 'task_completion',
+                  taskId: task.id,
+                  categoryId: task.categoryId,
+                  description: cumulativeMistakes > 0 
+                    ? `Task completed with ${cumulativeMistakes} total mistake(s) found across all reviews: ${task.title}` 
+                    : `Task approved: ${task.title}`,
+                  metadata: { 
+                    cumulativeMistakes: cumulativeMistakes,
+                    stage: currentStage,
+                    approvedCount: approvedChecklistItems.length, 
+                    totalItems: checklist?.items?.length || 0 
+                  }
+                });
+                console.log('✅ Checker payout result (final - non-workflow):', result);
               }
             }
           } catch (payoutError) {
@@ -1424,44 +1492,53 @@ const TaskService = {
       };
       }
 
+      // Calculate mistakes found in this review cycle
+      const checklist = ChecklistService.getChecklistByCategory(task.categoryId);
+      let currentMistakesCount = 0;
+      if (checklist && checklist.items && checklist.items.length > 0) {
+        const totalItems = checklist.items.length;
+        const approvedCount = approvedChecklistItems.length;
+        currentMistakesCount = totalItems - approvedCount;
+      }
+      
+      // Initialize cumulative mistakes tracking per stage if not exists
+      if (!task.stageCumulativeMistakes) {
+        task.stageCumulativeMistakes = {};
+      }
+      
+      // Get current stage (for workflow tasks) or use stage 0 for non-workflow
+      const currentStage = task.currentStage || 0;
+      const stageKey = `stage_${currentStage}`;
+      
+      // Accumulate mistakes for current stage
+      const previousMistakes = task.stageCumulativeMistakes[stageKey] || 0;
+      task.stageCumulativeMistakes[stageKey] = previousMistakes + currentMistakesCount;
+      
+      console.log('📊 Cumulative mistakes tracking (revision):', {
+        stage: currentStage,
+        stageKey: stageKey,
+        currentMistakesFound: currentMistakesCount,
+        previousCumulative: previousMistakes,
+        newCumulative: task.stageCumulativeMistakes[stageKey]
+      });
+      
+      // Update task with cumulative mistakes
+      tasks[taskIndex] = {
+        ...tasks[taskIndex],
+        stageCumulativeMistakes: task.stageCumulativeMistakes
+      };
+      
       saveTasks();
       
-      // Calculate checker earnings for mistakes found during revision
-      try {
-        console.log('💰 Starting checker payout calculation for revision');
-        const checklist = ChecklistService.getChecklistByCategory(task.categoryId);
-        console.log('📋 Checklist found:', checklist ? 'Yes' : 'No');
-        
-        if (checklist && checklist.items && checklist.items.length > 0) {
-          const totalItems = checklist.items.length;
-          const approvedCount = approvedChecklistItems.length;
-          const mistakesCount = totalItems - approvedCount;
-          
-          console.log('🔍 Revision analysis:', { totalItems, approvedCount, mistakesCount });
-          
-          if (mistakesCount > 0 && adminId) {
-            const checkerEarnings = RateManagerService.calculateCheckerEarnings(task.categoryId, mistakesCount);
-            console.log('📊 Checker earnings calculated:', checkerEarnings);
-            
-            if (checkerEarnings > 0) {
-              const result = WalletService.addEarnings({
-                userId: adminId,
-                amount: checkerEarnings,
-                source: 'mistake_found',
-                taskId: task.id,
-                categoryId: task.categoryId,
-                description: `Found ${mistakesCount} mistake(s) requiring revision: ${task.title}`,
-                metadata: { mistakesCount, approvedCount, totalItems, revision: true }
-              });
-              console.log('✅ Checker payout result:', result);
-            }
-          }
-        }
-      } catch (payoutError) {
-        console.error('❌ Error calculating payouts:', payoutError);
-        console.error('Stack trace:', payoutError.stack);
-        // Don't fail the revision request if payout calculation fails
-      }
+      // Note: Checker earnings will be calculated at stage completion using cumulative mistakes
+      // We accumulate mistakes here, but payment happens when stage is completed (via TL approval or final approval)
+      console.log('📊 Mistakes accumulated for stage:', {
+        stage: currentStage,
+        stageKey: stageKey,
+        currentMistakesFound: currentMistakesCount,
+        cumulativeTotal: task.stageCumulativeMistakes[stageKey],
+        note: 'Payment will be made at stage completion based on cumulative mistakes'
+      });
       
       return { 
         success: true, 
@@ -1644,41 +1721,44 @@ const TaskService = {
                   console.warn('⚠️ Doer payout not added:', { doerEarnings, completedStageDoerId });
                 }
 
-                // Calculate and add checker earnings (if checker found mistakes)
+                // Calculate and add checker earnings using cumulative mistakes for completed stage
                 const checklist = ChecklistService.getChecklistByCategory(completedStageCategoryId);
-                if (checklist && checklist.items && completedStageCheckerId) {
-                  const approvedItems = completedStageHistory?.approvedChecklistItems || task.review?.approvedChecklistItems || [];
-                  const totalItems = checklist.items.length;
-                  const approvedCount = approvedItems.length;
-                  const mistakesCount = totalItems - approvedCount;
+                if (completedStageCheckerId) {
+                  // Get cumulative mistakes for completed stage
+                  const completedStageKey = `stage_${completedStage}`;
+                  const cumulativeMistakes = task.stageCumulativeMistakes?.[completedStageKey] || 0;
                   
-                  console.log('📋 Stage completion checklist analysis:', { totalItems, approvedCount, mistakesCount });
+                  console.log('📋 Stage completion checklist analysis (TL approval - final payment):', { 
+                    stage: completedStage,
+                    stageKey: completedStageKey,
+                    cumulativeMistakes: cumulativeMistakes,
+                    totalItems: checklist?.items?.length || 0
+                  });
                   
-                  if (mistakesCount > 0) {
-                    const checkerEarnings = RateManagerService.calculateCheckerEarnings(completedStageCategoryId, mistakesCount);
-                    console.log('📊 Checker earnings calculated:', checkerEarnings, 'for', mistakesCount, 'mistakes');
-                    
-                    if (checkerEarnings > 0) {
-                      const checkerResult = WalletService.addEarnings({
-                        userId: completedStageCheckerId,
-                        amount: checkerEarnings,
-                        source: 'mistake_found',
-                        taskId: task.id,
-                        categoryId: completedStageCategoryId,
-                        description: `Found ${mistakesCount} mistake(s) at stage ${completedStage}: ${task.title}`,
-                        metadata: { mistakesCount, approvedCount, totalItems, stage: completedStage }
-                      });
-                      console.log('✅ Checker payout result:', checkerResult);
-                    }
-                  } else {
-                    console.log('ℹ️ No mistakes found, no checker earnings');
+                  // Checker gets credit when stage is completed (base credit + cumulative mistake credit)
+                  const checkerEarnings = RateManagerService.calculateCheckerEarnings(completedStageCategoryId, cumulativeMistakes, true);
+                  console.log('📊 Checker earnings calculated (TL approval - final):', checkerEarnings, 'for', cumulativeMistakes, 'cumulative mistakes, stage completed: true');
+                  
+                  if (checkerEarnings > 0) {
+                    const checkerResult = WalletService.addEarnings({
+                      userId: completedStageCheckerId,
+                      amount: checkerEarnings,
+                      source: cumulativeMistakes > 0 ? 'mistake_found' : 'task_completion',
+                      taskId: task.id,
+                      categoryId: completedStageCategoryId,
+                      description: cumulativeMistakes > 0 
+                        ? `Stage ${completedStage} completed with ${cumulativeMistakes} total mistake(s) found across all reviews: ${task.title}` 
+                        : `Stage ${completedStage} completed: ${task.title}`,
+                      metadata: { 
+                        cumulativeMistakes: cumulativeMistakes,
+                        stage: completedStage,
+                        totalItems: checklist?.items?.length || 0
+                      }
+                    });
+                    console.log('✅ Checker payout result (TL approval - final):', checkerResult);
                   }
                 } else {
-                  console.warn('⚠️ Cannot calculate checker earnings:', { 
-                    hasChecklist: !!checklist, 
-                    hasItems: checklist?.items?.length > 0, 
-                    checkerId: completedStageCheckerId 
-                  });
+                  console.warn('⚠️ Cannot calculate checker earnings: checkerId not found');
                 }
               } catch (payoutError) {
                 console.error('❌ Error calculating payouts:', payoutError);
@@ -1858,32 +1938,42 @@ const TaskService = {
                 console.warn('⚠️ Doer payout not added:', { doerEarnings, finalStageDoerId });
               }
 
-              // Calculate and add checker earnings (if checker found mistakes)
+              // Calculate and add checker earnings using cumulative mistakes for final stage
               const checklist = ChecklistService.getChecklistByCategory(completedStageCategoryId);
-              if (checklist && checklist.items && finalStageCheckerId) {
-                const approvedItems = task.review?.approvedChecklistItems || task.review?.teamLeaderApprovedChecklistItems || [];
-                const totalItems = checklist.items.length;
-                const approvedCount = approvedItems.length;
-                const mistakesCount = totalItems - approvedCount;
+              if (finalStageCheckerId) {
+                // Get cumulative mistakes for final stage
+                const finalStageKey = `stage_${task.currentStage}`;
+                const cumulativeMistakes = task.stageCumulativeMistakes?.[finalStageKey] || 0;
                 
-                console.log('📋 Final approval checklist analysis:', { totalItems, approvedCount, mistakesCount });
+                console.log('📋 Final approval checklist analysis (TL approval - final stage):', { 
+                  stage: task.currentStage,
+                  stageKey: finalStageKey,
+                  cumulativeMistakes: cumulativeMistakes,
+                  totalItems: checklist?.items?.length || 0
+                });
                 
-                if (mistakesCount > 0) {
-                  const checkerEarnings = RateManagerService.calculateCheckerEarnings(completedStageCategoryId, mistakesCount);
-                  console.log('📊 Checker earnings calculated:', checkerEarnings, 'for', mistakesCount, 'mistakes');
-                  
-                  if (checkerEarnings > 0) {
-                    const checkerResult = WalletService.addEarnings({
-                      userId: finalStageCheckerId,
-                      amount: checkerEarnings,
-                      source: 'mistake_found',
-                      taskId: task.id,
-                      categoryId: completedStageCategoryId,
-                      description: `Found ${mistakesCount} mistake(s) - Task finally approved: ${task.title}`,
-                      metadata: { mistakesCount, approvedCount, totalItems, finalApproval: true, stage: task.currentStage }
-                    });
-                    console.log('✅ Checker payout result:', checkerResult);
-                  }
+                // Checker gets credit when final stage is completed (base credit + cumulative mistake credit)
+                const checkerEarnings = RateManagerService.calculateCheckerEarnings(completedStageCategoryId, cumulativeMistakes, true);
+                console.log('📊 Checker earnings calculated (TL approval - final stage):', checkerEarnings, 'for', cumulativeMistakes, 'cumulative mistakes, stage completed: true');
+                
+                if (checkerEarnings > 0) {
+                  const checkerResult = WalletService.addEarnings({
+                    userId: finalStageCheckerId,
+                    amount: checkerEarnings,
+                    source: cumulativeMistakes > 0 ? 'mistake_found' : 'task_completion',
+                    taskId: task.id,
+                    categoryId: completedStageCategoryId,
+                    description: cumulativeMistakes > 0 
+                      ? `Task finally approved with ${cumulativeMistakes} total mistake(s) found across all reviews: ${task.title}` 
+                      : `Task finally approved: ${task.title}`,
+                    metadata: { 
+                      cumulativeMistakes: cumulativeMistakes,
+                      totalItems: checklist?.items?.length || 0, 
+                      finalApproval: true, 
+                      stage: task.currentStage 
+                    }
+                  });
+                  console.log('✅ Checker payout result (TL approval - final stage):', checkerResult);
                 }
               }
             } catch (payoutError) {
@@ -1950,41 +2040,44 @@ const TaskService = {
               console.warn('⚠️ Doer payout not added:', { doerEarnings, completedStageDoerId });
             }
 
-            // Calculate and add checker earnings (if checker found mistakes)
+            // Calculate and add checker earnings using cumulative mistakes for completed stage
             const checklist = ChecklistService.getChecklistByCategory(completedStageCategoryId);
-            if (checklist && checklist.items && completedStageCheckerId) {
-              const approvedItems = completedStageHistory?.approvedChecklistItems || task.review?.approvedChecklistItems || [];
-              const totalItems = checklist.items.length;
-              const approvedCount = approvedItems.length;
-              const mistakesCount = totalItems - approvedCount;
+            if (completedStageCheckerId) {
+              // Get cumulative mistakes for completed stage
+              const completedStageKey = `stage_${completedStage}`;
+              const cumulativeMistakes = task.stageCumulativeMistakes?.[completedStageKey] || 0;
               
-              console.log('📋 Stage completion checklist analysis:', { totalItems, approvedCount, mistakesCount });
+              console.log('📋 Stage completion checklist analysis (TL approval - intermediate final):', { 
+                stage: completedStage,
+                stageKey: completedStageKey,
+                cumulativeMistakes: cumulativeMistakes,
+                totalItems: checklist?.items?.length || 0
+              });
               
-              if (mistakesCount > 0) {
-                const checkerEarnings = RateManagerService.calculateCheckerEarnings(completedStageCategoryId, mistakesCount);
-                console.log('📊 Checker earnings calculated:', checkerEarnings, 'for', mistakesCount, 'mistakes');
-                
-                if (checkerEarnings > 0) {
-                  const checkerResult = WalletService.addEarnings({
-                    userId: completedStageCheckerId,
-                    amount: checkerEarnings,
-                    source: 'mistake_found',
-                    taskId: task.id,
-                    categoryId: completedStageCategoryId,
-                    description: `Found ${mistakesCount} mistake(s) at stage ${completedStage}: ${task.title}`,
-                    metadata: { mistakesCount, approvedCount, totalItems, stage: completedStage }
-                  });
-                  console.log('✅ Checker payout result:', checkerResult);
-                }
-              } else {
-                console.log('ℹ️ No mistakes found, no checker earnings');
+              // Checker gets credit when stage is completed (base credit + cumulative mistake credit)
+              const checkerEarnings = RateManagerService.calculateCheckerEarnings(completedStageCategoryId, cumulativeMistakes, true);
+              console.log('📊 Checker earnings calculated (TL approval - intermediate final):', checkerEarnings, 'for', cumulativeMistakes, 'cumulative mistakes, stage completed: true');
+              
+              if (checkerEarnings > 0) {
+                const checkerResult = WalletService.addEarnings({
+                  userId: completedStageCheckerId,
+                  amount: checkerEarnings,
+                  source: cumulativeMistakes > 0 ? 'mistake_found' : 'task_completion',
+                  taskId: task.id,
+                  categoryId: completedStageCategoryId,
+                  description: cumulativeMistakes > 0 
+                    ? `Stage ${completedStage} completed with ${cumulativeMistakes} total mistake(s) found across all reviews: ${task.title}` 
+                    : `Stage ${completedStage} completed: ${task.title}`,
+                  metadata: { 
+                    cumulativeMistakes: cumulativeMistakes,
+                    stage: completedStage,
+                    totalItems: checklist?.items?.length || 0
+                  }
+                });
+                console.log('✅ Checker payout result (TL approval - intermediate final):', checkerResult);
               }
             } else {
-              console.warn('⚠️ Cannot calculate checker earnings:', { 
-                hasChecklist: !!checklist, 
-                hasItems: checklist?.items?.length > 0, 
-                checkerId: completedStageCheckerId 
-              });
+              console.warn('⚠️ Cannot calculate checker earnings: checkerId not found');
             }
           } catch (payoutError) {
             console.error('❌ Error calculating payouts:', payoutError);
